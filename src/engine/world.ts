@@ -181,6 +181,18 @@ function applyAssign(world: WorldState, jobId: JobId, moduleId: ModuleId): void 
   for (const message of world.rules.assignWarnings(world, job, module)) {
     warn(world, message);
   }
+  switch (world.rules.assignAction(world, job, module)) {
+    case "noop":
+      return;
+    case "reprocess":
+      // 같은 모듈 슬롯을 그대로 쓰고 처리를 처음부터 다시 한다.
+      job.state = "PROCESSING";
+      job.progress = 0;
+      emit(world, { type: "processStarted", jobId: job.id, moduleId: module.id, t: world.simTime });
+      return;
+    case "move":
+      break;
+  }
   const from = job.location;
   detach(world, job);
   job.state = "MOVING";

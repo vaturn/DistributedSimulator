@@ -128,6 +128,14 @@ export interface MoveInfo {
   remaining: number;
 }
 
+/**
+ * 배치 명령이 실제로 할 일.
+ * - move: 목적지 모듈로 이동한다(다른 모듈 또는 대기 구역에서 온 작업).
+ * - reprocess: 같은 모듈 슬롯에서 처리를 처음부터 다시 한다(DONE_AT_MODULE 작업).
+ * - noop: 바뀔 것이 없다(같은 모듈로 이동 중, 대기 중, 처리 중). 상태 불변 + warning.
+ */
+export type AssignAction = "move" | "reprocess" | "noop";
+
 /** 배치/회수 가능 여부 판정 결과 */
 export interface RuleCheck {
   ok: boolean;
@@ -150,11 +158,17 @@ export interface RuleSet {
   isJobComplete(world: WorldState, job: Job): boolean;
   /** 처리 끝난(완료되지 않은) 작업을 모듈에서 대기 구역으로 돌려보내는가 */
   releaseWhenDone(world: WorldState, job: Job, module: Module): boolean;
-  /** 작업을 모듈에 배치할 수 있는가 (불가하면 명령 무시 + warning) */
+  /**
+   * 작업을 모듈에 배치할 수 있는가 (불가하면 명령 무시 + warning).
+   * 배치 판단은 감독관 책임이므로, 존재하지 않는 대상·완료된 작업·이동 금지처럼
+   * 명령 자체를 수행할 수 없는 경우만 거부한다. 나머지는 assignWarnings로 경고한다.
+   */
   canAssign(world: WorldState, jobId: JobId, moduleId: ModuleId): RuleCheck;
+  /** 허용된 배치 명령이 실제로 할 일 (이동, 같은 모듈 재처리, 무의미한 명령) */
+  assignAction(world: WorldState, job: Job, module: Module): AssignAction;
   /** 작업을 대기 구역으로 돌려보낼 수 있는가 */
   canUnassign(world: WorldState, jobId: JobId): RuleCheck;
-  /** 배치는 허용하되 경고할 내용 (필요 없는 결과, 이미 얻은 결과 등) */
+  /** 배치는 허용하되 경고할 내용 (필요 없는 결과, 이미 얻은 결과, 대기열 상한 초과, 무의미한 명령 등) */
   assignWarnings(world: WorldState, job: Job, module: Module): string[];
   /** 처리 중인 작업을 옮길 때 처리를 취소하는가 */
   cancelsOnMove(world: WorldState, job: Job): boolean;

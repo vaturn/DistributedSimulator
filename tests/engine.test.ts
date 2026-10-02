@@ -474,7 +474,7 @@ describe.each(RULE_SETS)("엔진 (%s)", (_name, rules) => {
       expect(job(world, "J2").state).toBe("QUEUED");
     });
 
-    it("queueLimit에 도달한 모듈에는 배치되지 않고 warning을 남긴다", () => {
+    it("queueLimit을 넘는 배치도 수행하고 warning만 남긴다 (배치 판단은 감독관 책임)", () => {
       const world = make(
         makeScenario({
           modules: [{ id: MA, resultType: RA, processTime: 1, capacity: 1 }],
@@ -483,11 +483,32 @@ describe.each(RULE_SETS)("엔진 (%s)", (_name, rules) => {
         }),
       );
       step(world, [assign("J1", MA), assign("J2", MA)]);
-      expect(canAssign(world, "J3", MA).ok).toBe(false);
+      // 상한 안의 배치에는 경고가 없다
+      expect(hasEvent(world.events, "warning")).toBe(false);
+      expect(canAssign(world, "J3", MA).ok).toBe(true);
       step(world, [assign("J3", MA)]);
-      expect(job(world, "J3").state).toBe("POOL");
-      expect(mod(world, MA).queue).toEqual(["J2"]);
+      expect(job(world, "J3").state).toBe("QUEUED");
+      expect(mod(world, MA).queue).toEqual(["J2", "J3"]);
+      const warnings = world.events.filter((e) => e.type === "warning");
+      expect(warnings).toHaveLength(1);
+      // 상한을 넘은 작업도 FIFO 순서대로 처리된다
+      stepUntil(world, (w) => w.completedCount === 3, 40);
+      expect(job(world, "J2").completedAt!).toBeLessThan(job(world, "J3").completedAt!);
+    });
+
+    it("queueLimit은 이동 중인 작업도 자리를 차지한 것으로 세어 경고한다", () => {
+      const world = make(
+        makeScenario({
+          modules: [{ id: MA, resultType: RA, processTime: 1, capacity: 1 }],
+          initial: [[RA], [RA], [RA]],
+          config: { queueLimit: 1, moveTime: 1 },
+        }),
+      );
+      step(world, [assign("J1", MA), assign("J2", MA)]);
+      expect(hasEvent(world.events, "warning")).toBe(false);
+      step(world, [assign("J3", MA)]);
       expect(hasEvent(world.events, "warning")).toBe(true);
+      expect(job(world, "J3").state).toBe("MOVING");
     });
   });
 
@@ -653,6 +674,114 @@ describe.each(RULE_SETS)("엔진 (%s)", (_name, rules) => {
       expect(world.completedCount).toBe(1);
       expect(hasEvent(world.events, "warning")).toBe(true);
     });
+  });
+
+  describe("이동 중 작업 unassign", () => {
+    it("이동 중인 작업을 unassign하면 이동 시간 없이 즉시 POOL로 돌아가고 도착하지 않는다", () => {
+      const world = make(
+        makeScenario({
+          modules: [{ id: MA, resultType: RA, processTime: 1 }],
+          initial: [[RA]],
+          config: { dt: 0.1, moveTime: 1 },
+        }),
+      );
+      step(world, [assign("J1", MA)]);
+      runSteps(world, 2);
+      expect(job(world, "J1").state).toBe("MOVING");
+      expect(world.moves.has("J1")).toBe(true);
+
+      step(world, [unassign("J1")]);
+      expect(hasEvent(world.events, "warning")).toBe(false);
+      const j = job(world, "J1");
+      expect(j.state).toBe("POOL");
+      expect(j.location).toEqual({ kind: "pool" });
+      expect(j.progress).toBe(0);
+      expect(world.moves.has("J1")).toBe(false);
+      expect(hasEvent(world.events, "processCancelled", "J1")).toBe(false);
+
+      // 이후 원래 도착 시각이 지나도 모듈에 도착하지 않는다
+      const later = flatEvents(runSteps(world, 20));
+      expect(hasEvent(later, "jobArrived", "J1")).toBe(false);
+      expect(job(world, "J1").state).toBe("POOL");
+      expect(mod(world, MA).slots).toEqual([]);
+      expect(mod(world, MA).queue).toEqual([]);
+    });
+  });
+
+  describe("같은 모듈 재배치", () => {
+    const scenario = (config: Partial<Scenario["config"]> = {}): Scenario =>
+      makeScenario({
+        modules: [{ id: MA, resultType: RA, processTime: 1 }],
+        // 결과를 얻어도 완료되지 않아 DONE_AT_MODULE로 머문다
+        initial: [[RA, RB], [RA, RB]],
+        config: { dt: 0.1, ...config },
+      });
+
+    it("DONE_AT_MODULE 작업을 같은 모듈에 다시 배치하면 슬롯 그대로 처음부터 다시 처리한다", () => {
+      const world = make(scenario());
+      step(world, [assign("J1", MA)]);
+      stepUntil(world, (w) => job(w, "J1").state === "DONE_AT_MODULE", 20);
+      expect(canAssign(world, "J1", MA).ok).toBe(true);
+
+      const restartAt = world.simTime;
+      step(world, [assign("J1", MA)]);
+      const j = job(world, "J1");
+      expect(j.state).toBe("PROCESSING");
+      expect(j.location).toEqual({ kind: "module", moduleId: MA });
+      expect(mod(world, MA).slots).toEqual(["J1"]);
+      // progress 0부터 다시 세므로 이번 step 진행분만 있다
+      expect(j.progress).toBeCloseTo(0.1, TIME_DIGITS);
+      expect(findEvent(world.events, "processStarted", "J1").t).toBeCloseTo(restartAt, TIME_DIGITS);
+      // 이미 가진 결과이므로 중복 경고
+      expect(hasEvent(world.events, "warning")).toBe(true);
+      expect(world.moves.has("J1")).toBe(false);
+
+      // 처리 시간 1 뒤에 다시 처리가 끝난다
+      const all = flatEvents(runSteps(world, 15));
+      expect(findEvent(all, "processFinished", "J1").t).toBeCloseTo(restartAt + 1, TIME_DIGITS);
+      expect(job(world, "J1").state).toBe("DONE_AT_MODULE");
+      expect([...job(world, "J1").acquired]).toEqual([RA]);
+    });
+
+    it("moveTime이 있어도 같은 모듈 재처리는 이동 없이 바로 시작한다", () => {
+      const world = make(scenario({ moveTime: 1 }));
+      step(world, [assign("J1", MA)]);
+      stepUntil(world, (w) => job(w, "J1").state === "DONE_AT_MODULE", 40);
+      step(world, [assign("J1", MA)]);
+      expect(job(world, "J1").state).toBe("PROCESSING");
+      expect(world.moves.has("J1")).toBe(false);
+    });
+
+    it.each([
+      ["MOVING", { moveTime: 1 }, 1],
+      ["QUEUED", {}, 1],
+      ["PROCESSING", {}, 3],
+      ["PROCESSING (cancelOnMove=false)", { cancelOnMove: false }, 3],
+    ] as const)(
+      "%s 작업을 같은 모듈에 다시 배치하면 상태가 바뀌지 않고 warning만 남긴다",
+      (label, config, stepsBefore) => {
+        const world = make(scenario(config));
+        // QUEUED 상황: J2가 J1 뒤에 줄 선다
+        const target = label === "QUEUED" ? "J2" : "J1";
+        runSteps(world, stepsBefore, { 0: [assign("J1", MA), assign("J2", MA)] });
+        const expectedState = label.startsWith("PROCESSING") ? "PROCESSING" : label;
+        expect(job(world, target).state).toBe(expectedState);
+        expect(canAssign(world, target, MA).ok).toBe(true);
+
+        const before = stateWithoutEvents(world);
+        apply(world, assign(target, MA));
+        expect(stateWithoutEvents(world)).toEqual(before);
+        expect(world.events.filter((e) => e.type === "warning")).toHaveLength(1);
+
+        // step으로 넘겨도 명령 없이 돌린 것과 같은 결과다
+        const other = make(scenario(config));
+        runSteps(other, stepsBefore, { 0: [assign("J1", MA), assign("J2", MA)] });
+        step(world, [assign(target, MA)]);
+        step(other, []);
+        expect(stateWithoutEvents(world)).toEqual(stateWithoutEvents(other));
+        expect(world.events.filter((e) => e.type !== "warning")).toEqual(other.events);
+      },
+    );
   });
 
   describe("§11-7 결정성", () => {

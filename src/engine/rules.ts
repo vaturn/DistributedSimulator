@@ -2,6 +2,7 @@
 // world.ts, 렌더러, UI, 감독관은 규칙을 직접 계산하지 않고 world.rules 또는 이 파일의 함수를 부른다.
 
 import type {
+  AssignAction,
   Job,
   JobId,
   JobSpec,
@@ -85,6 +86,20 @@ function checkMovable(world: WorldState, job: Job): RuleCheck {
   return { ok: true };
 }
 
+/**
+ * 배치 명령이 할 일. 같은 모듈에 다시 배치하면 DONE_AT_MODULE 작업은 다시 처리하고,
+ * 이동 중·대기 중·처리 중 작업은 바뀔 것이 없다.
+ */
+function assignAction(_world: WorldState, job: Job, module: Module): AssignAction {
+  if (job.location.kind !== "module" || job.location.moduleId !== module.id) return "move";
+  return job.state === "DONE_AT_MODULE" ? "reprocess" : "noop";
+}
+
+/**
+ * 배치 판단은 감독관 책임이다. 엔진은 명령을 수행할 수 없는 경우만 거부한다:
+ * 없는 작업/모듈, 완료된 작업, (cancelOnMove=false일 때) 처리 중 작업을 다른 곳으로 옮기기.
+ * 대기열 상한 초과, 같은 모듈 재배치 등은 허용하고 assignWarnings로 경고한다.
+ */
 function defaultCanAssign(world: WorldState, jobId: JobId, moduleId: ModuleId): RuleCheck {
   const job = world.jobs.get(jobId);
   if (!job) return { ok: false, reason: `존재하지 않는 작업입니다: ${jobId}` };
@@ -93,17 +108,8 @@ function defaultCanAssign(world: WorldState, jobId: JobId, moduleId: ModuleId): 
   if (job.state === "COMPLETED") {
     return { ok: false, reason: `이미 완료된 작업입니다: ${jobId}` };
   }
-  if (job.location.kind === "module" && job.location.moduleId === moduleId) {
-    return { ok: false, reason: `작업 ${jobId}은(는) 이미 모듈 ${moduleId}에 있습니다.` };
-  }
-  const movable = checkMovable(world, job);
-  if (!movable.ok) return movable;
-  const limit = world.config.queueLimit;
-  if (limit !== null) {
-    const occupied = module.slots.length + module.queue.length + incomingCount(world, moduleId, jobId);
-    if (occupied >= module.capacity + limit) {
-      return { ok: false, reason: `모듈 ${moduleId}의 대기열이 가득 찼습니다.` };
-    }
+  if (world.rules.assignAction(world, job, module) === "move") {
+    return checkMovable(world, job);
   }
   return { ok: true };
 }
@@ -120,16 +126,33 @@ function defaultCanUnassign(world: WorldState, jobId: JobId): RuleCheck {
   return checkMovable(world, job);
 }
 
-/** 허용은 하지만 경고할 배치: 필요 없는 결과, 이미 얻은 결과 (§2.4) */
-function assignWarnings(_world: WorldState, job: Job, module: Module): string[] {
+/** 대기열 상한(queueLimit)을 넘는 배치인가. 이동 중인 작업도 자리를 차지한 것으로 센다. */
+function exceedsQueueLimit(world: WorldState, job: Job, module: Module): boolean {
+  const limit = world.config.queueLimit;
+  if (limit === null) return false;
+  const occupied = module.slots.length + module.queue.length + incomingCount(world, module.id, job.id);
+  return occupied >= module.capacity + limit;
+}
+
+/**
+ * 허용은 하지만 경고할 배치 (§2.4): 무의미한 명령, 이미 얻은 결과, 필요 없는 결과, 대기열 상한 초과.
+ */
+function assignWarnings(world: WorldState, job: Job, module: Module): string[] {
+  const action = world.rules.assignAction(world, job, module);
+  if (action === "noop") {
+    return [`작업 ${job.id}은(는) 이미 모듈 ${module.id}에 있어 바뀌는 것이 없습니다.`];
+  }
+  const warnings: string[] = [];
   const r = module.resultType;
   if (job.acquired.has(r)) {
-    return [`작업 ${job.id}은(는) 이미 결과 ${r}을(를) 가지고 있습니다 (모듈 ${module.id}).`];
+    warnings.push(`작업 ${job.id}은(는) 이미 결과 ${r}을(를) 가지고 있습니다 (모듈 ${module.id}).`);
+  } else if (!job.required.has(r)) {
+    warnings.push(`작업 ${job.id}에는 결과 ${r}이(가) 필요 없습니다 (모듈 ${module.id}).`);
   }
-  if (!job.required.has(r)) {
-    return [`작업 ${job.id}에는 결과 ${r}이(가) 필요 없습니다 (모듈 ${module.id}).`];
+  if (action === "move" && exceedsQueueLimit(world, job, module)) {
+    warnings.push(`모듈 ${module.id}의 대기열 상한(${world.config.queueLimit})을 넘었습니다.`);
   }
-  return [];
+  return warnings;
 }
 
 // ---------- 이동과 대기열 ----------
@@ -237,6 +260,7 @@ export const defaultRules: RuleSet = Object.freeze({
   isJobComplete,
   releaseWhenDone,
   canAssign: defaultCanAssign,
+  assignAction,
   canUnassign: defaultCanUnassign,
   assignWarnings,
   cancelsOnMove,
