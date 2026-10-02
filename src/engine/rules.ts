@@ -433,3 +433,34 @@ function earliestIndex(values: readonly number[]): number {
   }
   return best;
 }
+
+/** 드래그 중 대상 모듈 강조용 배치 힌트 */
+export interface AssignHint {
+  /** 엔진이 이 배치 명령을 받아들이는가 (canAssign) */
+  ok: boolean;
+  /** 배치하면 아직 필요한 결과를 새로 얻는가 (상태가 바뀌지 않는 배치면 false) */
+  useful: boolean;
+  /** 허용되지만 apply 때 warning 이벤트로 남을 메시지 (assignWarnings와 같은 출처) */
+  warnings: string[];
+  /** ok=false일 때 거부 이유 */
+  reason?: string;
+}
+
+/**
+ * 이 작업을 이 모듈에 배치하면 어떻게 되는지 알려 준다. world를 바꾸지 않는다.
+ * 판정은 world.rules의 canAssign, assignAction, assignWarnings와 usefulResults를 그대로 쓴다.
+ */
+export function assignHint(world: Readonly<WorldState>, jobId: JobId, moduleId: ModuleId): AssignHint {
+  const check = world.rules.canAssign(world, jobId, moduleId);
+  const job = world.jobs.get(jobId);
+  const module = world.modules.get(moduleId);
+  if (!check.ok || !job || !module) {
+    return { ok: false, useful: false, warnings: [], reason: check.reason };
+  }
+  const changes = world.rules.assignAction(world, job, module) !== "noop";
+  return {
+    ok: true,
+    useful: changes && usefulResults(world, jobId, moduleId).length > 0,
+    warnings: world.rules.assignWarnings(world, job, module),
+  };
+}

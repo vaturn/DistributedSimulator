@@ -33,6 +33,21 @@ export const COLORS = {
   /** DONE_AT_MODULE(처리 끝, 감독관이 옮기길 기다림) 표시 */
   doneMarker: "#ffd166",
   ended: "#ff6b6b",
+  /** 드래그 중: 필요한 결과를 주고 경고 없이 놓을 수 있는 모듈 */
+  dropUseful: "#06d6a0",
+  /** 드래그 중: 놓을 수는 있지만 경고가 있는 모듈(필요 없는 결과, 대기열 초과 등) */
+  dropWarn: "#ffd166",
+  /** 드래그 중: 대기 구역에 놓을 수 있을 때 대기 구역 테두리 */
+  dropPool: "#8ecae6",
+  /** 드래그 툴팁 바탕·글자 */
+  tooltipFill: "#000000",
+  tooltipText: "#ffffff",
+  tooltipWarn: "#ffd166",
+  tooltipBlocked: "#ff6b6b",
+  /** 경고 토스트 바탕·테두리·글자 */
+  toastFill: "#3a2a1a",
+  toastBorder: "#ffd166",
+  toastText: "#ffe8b0",
 } as const;
 
 /** 화면 바깥 여백(px) */
@@ -103,3 +118,35 @@ export const HEADER_TINT_ALPHA = 0.35;
 export const FULL_TURN = Math.PI * 2;
 /** 파이·링 시작 각도 (12시 방향) */
 export const START_ANGLE = -Math.PI / 2;
+
+/** 드래그 강조 테두리 두께(px): 놓을 수 있는 모듈 / 포인터 아래 대상 */
+export const DROP_HIGHLIGHT_WIDTH = 3;
+export const DROP_HOVER_WIDTH = 6;
+/** 드래그 중 놓을 수 없는 모듈의 투명도 */
+export const DROP_BLOCKED_ALPHA = 0.3;
+/** 드래그 중인 작업의 원래 자리 투명도 */
+export const DRAG_GHOST_ALPHA = 0.3;
+/** 포인터를 따라가는 작업 원의 투명도 */
+export const DRAG_JOB_ALPHA = 0.9;
+/** 드래그로 보기 시작하는 이동 거리(px). 이보다 적게 움직이고 놓으면 클릭으로 본다. */
+export const DRAG_THRESHOLD = 5;
+/** 작업 원 히트 판정 여유(px). 작은 원(대기열)도 손가락으로 잡기 쉽게 반지름에 더한다. */
+export const HIT_SLOP = 4;
+
+/** 드래그 툴팁: 포인터에서 떨어진 거리(px), 안쪽 여백(px), 줄 높이(px), 최대 줄 수, 투명도 */
+export const TOOLTIP_OFFSET = 16;
+export const TOOLTIP_PADDING = 6;
+export const TOOLTIP_LINE_HEIGHT = 15;
+export const TOOLTIP_MAX_LINES = 4;
+export const TOOLTIP_ALPHA = 0.85;
+
+/** 경고 토스트: 최대 개수, 보이는 시간(실제 ms), 사라지기 시작하는 남은 시간(ms) */
+export const TOAST_MAX = 5;
+export const TOAST_DURATION_MS = 4000;
+export const TOAST_FADE_MS = 600;
+/** 경고 토스트 크기(px): 너비, 줄 높이, 간격, 안쪽 여백 */
+export const TOAST_WIDTH = 360;
+export const TOAST_HEIGHT = 24;
+export const TOAST_GAP = 6;
+export const TOAST_PADDING = 8;
+export const TOAST_BORDER_WIDTH = 1;

@@ -2,6 +2,7 @@
 // processProgressRatio, moveProgressRatio)
 import { describe, expect, it } from "vitest";
 import {
+  assignHint,
   estimatedWaitTime,
   mergeRules,
   moveProgressRatio,
@@ -233,6 +234,82 @@ describe("moveProgressRatio", () => {
     const before = deepCopy(w);
     moveProgressRatio(w, "J1");
     processProgressRatio(w, "J1");
+    expect(w).toEqual(before);
+  });
+});
+
+describe("assignHint", () => {
+  /** 이번 step에 생긴 warning 메시지 */
+  function warningMessages(w: ReturnType<typeof world3>): string[] {
+    return w.events.flatMap((e) => (e.type === "warning" ? [e.message] : []));
+  }
+
+  it("필요한 결과를 주는 모듈이면 ok, useful, 경고 없음", () => {
+    const w = world3([[RA, RB]]);
+    expect(assignHint(w, "J1", MA)).toEqual({ ok: true, useful: true, warnings: [] });
+  });
+
+  it("필요 없는 결과면 ok, !useful, 경고는 apply 때 남는 warning과 같다", () => {
+    const w = world3([[RA]]);
+    const hint = assignHint(w, "J1", MB);
+    expect(hint.ok).toBe(true);
+    expect(hint.useful).toBe(false);
+    expect(hint.warnings).toHaveLength(1);
+    step(w, [assign("J1", MB)]);
+    expect(warningMessages(w)).toEqual(hint.warnings);
+  });
+
+  it("이미 가진 결과면 ok, !useful, 경고는 apply 때 남는 warning과 같다", () => {
+    const w = world3([[RA, RB]]);
+    runSteps(w, 25, { 0: [assign("J1", MA)] }); // MA 처리 2s 끝남 → DONE_AT_MODULE
+    expect(w.jobs.get("J1")?.state).toBe("DONE_AT_MODULE");
+    const hint = assignHint(w, "J1", MA);
+    expect(hint.ok).toBe(true);
+    expect(hint.useful).toBe(false);
+    expect(hint.warnings).toHaveLength(1);
+    step(w, [assign("J1", MA)]);
+    expect(warningMessages(w)).toEqual(hint.warnings);
+  });
+
+  it("없는 모듈·없는 작업·완료된 작업이면 !ok, reason", () => {
+    const w = world3([[RA]]);
+    runSteps(w, 25, { 0: [assign("J1", MA)] });
+    expect(w.jobs.get("J1")?.state).toBe("COMPLETED");
+    for (const hint of [assignHint(w, "J1", "nope"), assignHint(w, "nope", MA), assignHint(w, "J1", MA)]) {
+      expect(hint.ok).toBe(false);
+      expect(hint.useful).toBe(false);
+      expect(hint.warnings).toEqual([]);
+      expect(hint.reason).toBeTruthy();
+    }
+  });
+
+  it("cancelOnMove=false면 처리 중 작업을 다른 모듈로 옮기는 힌트는 !ok", () => {
+    const w = world3([[RA, RB]], { cancelOnMove: false });
+    step(w, [assign("J1", MA)]);
+    expect(w.jobs.get("J1")?.state).toBe("PROCESSING");
+    const hint = assignHint(w, "J1", MB);
+    expect(hint.ok).toBe(false);
+    expect(hint.reason).toBeTruthy();
+  });
+
+  it("처리 중인 같은 모듈에 다시 놓으면 ok, !useful, 무의미 경고", () => {
+    const w = world3([[RA]]);
+    step(w, [assign("J1", MA)]);
+    const hint = assignHint(w, "J1", MA);
+    expect(hint.ok).toBe(true);
+    expect(hint.useful).toBe(false);
+    expect(hint.warnings).toHaveLength(1);
+    step(w, [assign("J1", MA)]);
+    expect(warningMessages(w)).toEqual(hint.warnings);
+  });
+
+  it("월드를 바꾸지 않는다", () => {
+    const w = world3([[RA], [RB]], { moveTime: 1, queueLimit: 0 });
+    step(w, [assign("J1", MA)]);
+    const before = deepCopy(w);
+    assignHint(w, "J1", MA);
+    assignHint(w, "J2", MA);
+    assignHint(w, "J2", "nope");
     expect(w).toEqual(before);
   });
 });
