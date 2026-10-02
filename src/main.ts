@@ -3,16 +3,17 @@
 // 루프 상태(재생/일시정지, 속도, 누적 시간) 계산은 ui/loopState.ts의 순수 함수가 한다.
 
 import { computeMetrics } from "./engine/metrics";
-import type { Scenario, SimEvent, WorldState } from "./engine/types";
+import { recordCommands, type CommandLogEntry } from "./engine/runner";
+import type { SimEvent, WorldState } from "./engine/types";
 import { createWorld, isEnded, step } from "./engine/world";
 import { render, type RenderInfo } from "./render/canvas";
 import { attachDragInput, computeDragView, type DragInput } from "./render/input";
 import { computeLayout, type Layout } from "./render/layout";
 import { collectResultTypes, createResultColors } from "./render/palette";
 import { createToastQueue, type ToastQueue } from "./render/toasts";
-import basicScenario from "./scenarios/basic.json";
+import { SCENARIOS } from "./scenarios/index";
 import { createManualSupervisor, type ManualSupervisor } from "./supervisor/manual";
-import { createGreedySupervisor } from "./supervisor/policies/greedy";
+import { POLICIES } from "./supervisor/registry";
 import type { Supervisor } from "./supervisor/types";
 import { createControls } from "./ui/controls";
 import {
@@ -25,36 +26,28 @@ import {
   togglePaused,
   type LoopState,
 } from "./ui/loopState";
+import { createExportButton } from "./ui/exportResult";
 import { createMetricsPanel } from "./ui/metricsPanel";
+import {
+  parseSelectionQuery,
+  resolveSessionConfig,
+  scenarioOptions,
+  selectionToQuery,
+  supervisorOptions,
+  type Selection,
+  type SelectionChoices,
+  type SessionConfig,
+} from "./ui/selection";
+import { createSelectors } from "./ui/selectors";
 
 /** 요소 id (index.html과 맞춘다) */
 const CANVAS_ID = "sim-canvas";
 const STAGE_ID = "stage";
 const CONTROLS_ID = "controls";
+const SESSION_CONTROLS_ID = "session-controls";
 const METRICS_ID = "metrics";
 /** 밀리초 → 초 */
 const MS_PER_SECOND = 1000;
-
-/** 감독관을 고르는 URL 쿼리 이름 (?supervisor=manual|greedy). 선택 UI는 M5에서 만든다. */
-const SUPERVISOR_QUERY = "supervisor";
-const SUPERVISOR_CHOICES = ["manual", "greedy"] as const;
-type SupervisorChoice = (typeof SUPERVISOR_CHOICES)[number];
-const DEFAULT_SUPERVISOR: SupervisorChoice = "manual";
-
-function isSupervisorChoice(v: string): v is SupervisorChoice {
-  return (SUPERVISOR_CHOICES as readonly string[]).includes(v);
-}
-
-/** URL 쿼리에서 감독관을 고른다. 없으면 기본값, 알 수 없는 값이면 기본값 + 콘솔 경고 */
-function supervisorChoiceFromUrl(search: string): SupervisorChoice {
-  const raw = new URLSearchParams(search).get(SUPERVISOR_QUERY);
-  if (raw === null) return DEFAULT_SUPERVISOR;
-  if (isSupervisorChoice(raw)) return raw;
-  console.warn(
-    `알 수 없는 감독관 "${raw}" → ${DEFAULT_SUPERVISOR}로 실행합니다. 가능한 값: ${SUPERVISOR_CHOICES.join(", ")}`,
-  );
-  return DEFAULT_SUPERVISOR;
-}
 
 function requireElement<T extends HTMLElement>(id: string, type: new () => T): T {
   const el = document.getElementById(id);
@@ -62,8 +55,20 @@ function requireElement<T extends HTMLElement>(id: string, type: new () => T): T
   return el;
 }
 
-const scenario = basicScenario as Scenario;
-const choice = supervisorChoiceFromUrl(window.location.search);
+/** 선택 가능한 감독관(수동 + 정책 registry)과 시나리오 */
+const choices: SelectionChoices = {
+  supervisors: supervisorOptions(POLICIES),
+  scenarios: scenarioOptions(SCENARIOS),
+};
+
+/** 시작 시 URL 쿼리에서 선택을 읽는다. 알 수 없는 값은 기본값으로 바꾸고 콘솔에 경고한다. */
+function initialSelection(): Selection {
+  const parsed = parseSelectionQuery(window.location.search, choices);
+  for (const w of parsed.warnings) console.warn(w);
+  return parsed.selection;
+}
+
+let selection: Selection = initialSelection();
 
 const canvas = requireElement(CANVAS_ID, HTMLCanvasElement);
 const stage = requireElement(STAGE_ID, HTMLElement);
@@ -75,29 +80,44 @@ const ctx: CanvasRenderingContext2D = ctxOrNull;
 
 /** 한 번의 실행(리셋하면 통째로 새로 만든다) */
 interface Session {
+  config: SessionConfig;
   world: WorldState;
   supervisor: Supervisor;
   manual: ManualSupervisor | null;
   toasts: ToastQueue;
   info: RenderInfo;
+  /** 감독관이 step마다 낸 명령 로그 (결과 JSON에 넣는다) */
+  commandLog: CommandLogEntry[];
+  /** 지금까지 돌린 step 수 (명령 로그의 step 번호) */
+  stepCount: number;
 }
 
-/** 같은 시나리오·시드로 월드와 감독관을 새로 만든다. 쌓인 수동 명령·토스트는 버려진다. */
+/** 현재 선택(감독관·시나리오)으로 월드와 감독관을 새로 만든다. 쌓인 수동 명령·토스트·명령 로그는 버려진다. */
 function createSession(): Session {
-  const world = createWorld(scenario);
-  const manual = choice === "manual" ? createManualSupervisor() : null;
-  const supervisor: Supervisor = manual ?? createGreedySupervisor();
+  const config = resolveSessionConfig(selection, POLICIES, SCENARIOS);
+  const world = createWorld(config.scenario);
+  const manual = config.manual ? createManualSupervisor() : null;
+  const supervisor: Supervisor = manual ?? createPolicySupervisor(config);
   return {
+    config,
     world,
     supervisor,
     manual,
     toasts: createToastQueue(),
     info: {
-      colors: createResultColors(collectResultTypes(scenario)),
-      scenarioName: scenario.name,
+      // 시나리오가 바뀌면 결과 종류 색도 그 시나리오로 다시 정한다.
+      colors: createResultColors(collectResultTypes(config.scenario)),
+      scenarioName: config.scenario.name,
       supervisorName: supervisor.name,
     },
+    commandLog: [],
+    stepCount: 0,
   };
+}
+
+function createPolicySupervisor(config: SessionConfig): Supervisor {
+  if (!config.createPolicy) throw new Error(`정책 감독관을 만들 수 없습니다: ${config.policyName}`);
+  return config.createPolicy(config.seed);
 }
 
 let session: Session = createSession();
@@ -138,9 +158,14 @@ function collectWarnings(events: readonly SimEvent[], now: number): void {
 
 /** step을 count번 돌린다. 종료 조건에 도달하면 멈추고 자동 일시정지한다. */
 function runSteps(count: number, now: number): void {
-  const { world, supervisor } = session;
+  const s = session;
+  const { world, supervisor } = s;
   for (let i = 0; i < count && !isEnded(world); i++) {
-    step(world, supervisor.decide(world));
+    const commands = supervisor.decide(world);
+    // 수동·정책 공통으로 이번 step에 넘긴 명령을 기록한다 (빈 명령 처리는 recordCommands가 정한다).
+    recordCommands(s.commandLog, s.stepCount, world.simTime, commands);
+    step(world, commands);
+    s.stepCount += 1;
     // world.events에는 마지막 step의 이벤트만 남으므로 step마다 모은다.
     collectWarnings(world.events, now);
   }
@@ -165,6 +190,25 @@ function refresh(now: number): void {
   draw(now);
 }
 
+/**
+ * 현재 선택으로 처음부터 다시 시작한다 (리셋과 선택 변경이 같은 경로를 쓴다).
+ * 드래그 상태·쌓인 명령·명령 로그를 버리고, 시나리오가 바뀌었으면 배치·색도 다시 계산한다.
+ */
+function restart(): void {
+  dragInput?.detach();
+  session = createSession();
+  dragInput = attachInput(session);
+  loop = resetLoopState(loop);
+  layout = resize();
+  refresh(performance.now());
+}
+
+/** 선택을 URL 쿼리에 반영한다 (새로고침해도 같은 설정). */
+function syncQuery(): void {
+  const query = selectionToQuery(window.location.search, selection);
+  window.history.replaceState(null, "", `${window.location.pathname}${query}${window.location.hash}`);
+}
+
 const controls = createControls(requireElement(CONTROLS_ID, HTMLElement), {
   onTogglePlay() {
     loop = togglePaused(loop);
@@ -177,19 +221,28 @@ const controls = createControls(requireElement(CONTROLS_ID, HTMLElement), {
     refresh(now);
   },
   onReset() {
-    // 드래그 상태를 버리고 같은 시나리오·시드로 처음부터 (감독관도 새로 만들어 쌓인 명령 폐기).
-    dragInput?.detach();
-    session = createSession();
-    dragInput = attachInput(session);
-    loop = resetLoopState(loop);
-    layout = resize();
-    refresh(performance.now());
+    restart();
   },
   onSpeedChange(index) {
     loop = setSpeedIndex(loop, index);
     controls.update(loop);
   },
 });
+
+const sessionControls = requireElement(SESSION_CONTROLS_ID, HTMLElement);
+createSelectors(sessionControls, choices, selection, {
+  onChange(next) {
+    selection = next;
+    syncQuery();
+    restart();
+  },
+});
+createExportButton(sessionControls, {
+  world: () => session.world,
+  meta: () => ({ scenario: session.config.scenarioName, policy: session.config.policyName, seed: session.config.seed }),
+  commandLog: () => session.commandLog,
+});
+syncQuery();
 
 new ResizeObserver(() => {
   layout = resize();

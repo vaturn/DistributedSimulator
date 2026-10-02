@@ -1,4 +1,4 @@
-// 지표 패널 표시 형식 테스트. DOM 없이 순수 포맷 함수와 metricsView만 검증한다.
+// 지표 표시 형식 테스트 (ui/metricsFormat.ts). DOM 없이 순수 포맷 함수와 metricsView만 검증한다.
 import { describe, expect, it } from "vitest";
 import type { Metrics } from "../src/engine/types";
 import {
@@ -9,7 +9,7 @@ import {
   formatRate,
   formatSeconds,
   metricsView,
-} from "../src/ui/metricsPanel";
+} from "../src/ui/metricsFormat";
 
 describe("포맷 함수", () => {
   it("formatNumber: 소수 자릿수 고정, null·NaN·무한대는 '-'", () => {

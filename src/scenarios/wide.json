@@ -1,0 +1,31 @@
+{
+  "name": "wide",
+  "seed": 2024,
+  "modules": [
+    { "id": "M1", "resultType": "A", "processTime": 2, "capacity": 1 },
+    { "id": "M2", "resultType": "A", "processTime": 4, "capacity": 1 },
+    { "id": "M3", "resultType": "B", "processTime": 3, "capacity": 1 },
+    { "id": "M4", "resultType": "B", "processTime": 5, "capacity": 2 },
+    { "id": "M5", "resultType": "C", "processTime": 2, "capacity": 1 },
+    { "id": "M6", "resultType": "D", "processTime": 6, "capacity": 2 },
+    { "id": "M7", "resultType": "E", "processTime": 1, "capacity": 1 },
+    { "id": "M8", "resultType": "E", "processTime": 3, "capacity": 1 }
+  ],
+  "jobs": {
+    "initial": [
+      { "required": ["A", "C"] },
+      { "required": ["B", "D"] },
+      { "required": ["A", "B", "E"] },
+      { "required": ["C", "D", "E"] },
+      { "required": ["D"] },
+      { "required": ["A", "E"] }
+    ],
+    "arrival": { "kind": "poisson", "rate": 0.6, "requiredPool": ["A", "B", "C", "D", "E"], "minReq": 1, "maxReq": 4 }
+  },
+  "config": {
+    "moveTime": 0.5,
+    "occupyWhenDone": true,
+    "cancelOnMove": true,
+    "endCondition": { "kind": "time", "value": 300 }
+  }
+}

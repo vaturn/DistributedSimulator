@@ -45,7 +45,7 @@
         padding: var(--gap); background: var(--panel-bg);
         border-left: 1px solid var(--panel-border); overflow-y: auto; min-width: 0;
       }
-      #controls { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+      #controls, #session-controls { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
       .ctrl-btn {
         font: inherit; color: var(--text); background: var(--btn-bg);
         border: 1px solid var(--btn-border); border-radius: var(--radius);
@@ -55,8 +55,11 @@
       .ctrl-btn:disabled { opacity: 0.4; cursor: not-allowed; }
       .ctrl-primary { background: var(--btn-primary); color: var(--btn-primary-text); border-color: var(--btn-primary); min-width: 7.5em; }
       .ctrl-primary:hover:not(:disabled) { background: var(--btn-primary); filter: brightness(1.1); }
-      .ctrl-speed { display: inline-flex; gap: 6px; align-items: center; color: var(--text-dim); }
-      .ctrl-speed select {
+      .ctrl-speed, .ctrl-select { display: inline-flex; gap: 6px; align-items: center; color: var(--text-dim); }
+      .ctrl-select { min-width: 0; }
+      .ctrl-select select { max-width: 100%; min-width: 0; }
+      .ctrl-export { flex-basis: 100%; }
+      .ctrl-speed select, .ctrl-select select {
         font: inherit; color: var(--text); background: var(--btn-bg);
         border: 1px solid var(--btn-border); border-radius: var(--radius); padding: 4px 6px;
       }
@@ -94,6 +97,7 @@
     </main>
     <aside id="sidebar">
       <section id="controls" aria-label="실행 컨트롤"></section>
+      <section id="session-controls" aria-label="감독관·시나리오 선택과 결과 내보내기"></section>
       <p class="shortcuts"><kbd>Space</kbd> 재생/정지 · <kbd>→</kbd> 한 단계 · <kbd>R</kbd> 리셋</p>
       <section id="metrics" aria-label="지표"></section>
     </aside>

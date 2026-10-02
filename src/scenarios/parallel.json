@@ -1,0 +1,25 @@
+{
+  "name": "parallel",
+  "seed": 7,
+  "modules": [
+    { "id": "M1", "resultType": "A", "processTime": 2, "capacity": 1 },
+    { "id": "M2", "resultType": "B", "processTime": 6, "capacity": 4 },
+    { "id": "M3", "resultType": "B", "processTime": 3, "capacity": 1 },
+    { "id": "M4", "resultType": "C", "processTime": 4, "capacity": 2 }
+  ],
+  "jobs": {
+    "initial": [
+      { "required": ["A", "B"] },
+      { "required": ["B", "C"] },
+      { "required": ["A", "B", "C"] },
+      { "required": ["B"] }
+    ],
+    "arrival": { "kind": "poisson", "rate": 0.5, "requiredPool": ["A", "B", "C"], "minReq": 1, "maxReq": 3 }
+  },
+  "config": {
+    "moveTime": 0,
+    "occupyWhenDone": true,
+    "cancelOnMove": true,
+    "endCondition": { "kind": "time", "value": 300 }
+  }
+}

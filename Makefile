@@ -27,6 +27,8 @@ override CO_AUTHOR := $(value CO_AUTHOR)
 export MSG CO_AUTHOR
 
 SEED_ARG := $(if $(SEED),--seed $(SEED),)
+# make sim은 OUT을 명령줄(또는 환경변수)로 줬을 때만 결과 JSON을 저장한다.
+SIM_OUT_ARG := $(if $(filter command line environment,$(origin OUT)),--out $(OUT),)
 
 .PHONY: help setup dev build preview test test-watch typecheck check sim compare clean distclean git-status commit push ship sync
 
@@ -70,8 +72,8 @@ typecheck: node_modules ## 타입 검사
 check: typecheck test ## 작업 완료 전 필수 검증 (타입 검사 + 테스트)
 	@echo "✓ check 통과"
 
-sim: node_modules ## 화면 없이 시뮬레이션 실행 (SCENARIO, POLICY, SEED)
-	$(NPM) run sim -- --scenario $(SCENARIO) --policy $(POLICY) $(SEED_ARG)
+sim: node_modules ## 화면 없이 시뮬레이션 실행 (SCENARIO, POLICY, SEED, OUT을 주면 결과 JSON 저장)
+	$(NPM) run sim -- --scenario $(SCENARIO) --policy $(POLICY) $(SEED_ARG) $(SIM_OUT_ARG)
 
 compare: node_modules ## 여러 정책을 같은 조건으로 비교 (SCENARIO, POLICIES, SEED, OUT)
 	@mkdir -p $(OUT)

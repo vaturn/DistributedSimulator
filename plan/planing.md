@@ -117,7 +117,8 @@ sim/
 │  │  └─ input.ts           # 드래그 앤 드롭, 클릭 판정 → manual supervisor
 │  ├─ ui/
 │  │  ├─ controls.ts        # 재생/일시정지/한 단계/속도/리셋
-│  │  └─ metricsPanel.ts    # 완료 수, 처리량 등
+│  │  ├─ metricsFormat.ts   # 지표 표시 형식 (순수 함수, UI와 CLI 공용)
+│  │  └─ metricsPanel.ts    # 완료 수, 처리량 등 (DOM)
 │  ├─ cli/
 │  │  └─ run.ts             # 화면 없이 실행/정책 비교 (make sim, make compare)
 │  └─ scenarios/

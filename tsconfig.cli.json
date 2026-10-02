@@ -1,0 +1,12 @@
+{
+  // CLI 진입점(src/cli/run.ts) 전용 설정. node 타입은 여기에서만 켜서
+  // 브라우저 코드(tsconfig.json)가 node 타입에 오염되지 않게 한다.
+  // CLI는 DOM을 쓰지 않으므로 DOM lib를 빼서, DOM 모듈을 import하면 타입 검사에서 걸리게 한다.
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "lib": ["ES2022"],
+    "types": ["node"]
+  },
+  "include": ["src/cli/run.ts"],
+  "exclude": []
+}
