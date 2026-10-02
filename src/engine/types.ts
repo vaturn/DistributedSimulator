@@ -17,7 +17,7 @@ export interface Module {
   slots: JobId[];
   /** 대기열 (앞이 먼저 들어온 작업) */
   queue: JobId[];
-  /** 가동률 계산용 누적 시간 */
+  /** 슬롯 단위 누적 가동 시간 (처리 중 슬롯 수 × dt의 합). 가동률 = busyTime / (simTime × capacity) */
   busyTime: number;
 }
 
@@ -36,6 +36,7 @@ export interface Job {
   progress: number;
   /** 등장 시각 (simTime) */
   createdAt: number;
+  /** 완료 시각: 완료된 step이 끝난 뒤의 시각 (simTime + dt) */
   completedAt?: number;
 }
 
@@ -167,7 +168,7 @@ export interface RuleSet {
   selectNextFromQueue(world: WorldState, module: Module): JobId | null;
   /** 이번 step에 새로 도착하는 작업 명세. random은 시드 RNG */
   arrivals(world: WorldState, dt: number, random: () => number): JobSpec[];
-  /** 이번 step에서 모듈 가동 시간(busyTime) 증가량 */
+  /** 이번 step에서 모듈 가동 시간(busyTime) 증가량. processedCount는 이번 step에 처리 중이던 슬롯 수 */
   busyTimeDelta(world: WorldState, module: Module, processedCount: number, dt: number): number;
   /** 종료 조건 판정 */
   isEnded(world: WorldState): boolean;

@@ -31,6 +31,7 @@
 3. 작업은 `required: Set<ResultType>`(목표 결과)과 `acquired: Set<ResultType>`(획득한 결과)를 가진다.
 4. `required ⊆ acquired`가 되는 순간 작업은 **완료**된다. 화면에서 사라지고(페이드아웃) 완료 카운터가 1 증가한다.
 5. 작업의 이동과 배치는 **감독관만** 할 수 있다. 작업이 스스로 다음 모듈로 가지 않는다.
+6. **시각 기록 규칙(확정)**: step 하나는 구간 `[simTime, simTime + dt]`를 진행한다. 진행이 끝나서 생기는 사건(`processFinished`, `jobCompleted`, `completedAt`)은 **step이 끝난 뒤의 시각** `simTime + dt`로 기록한다. 예: 처리 시간 2인 작업을 t=0에 배치하면(dt=0.1) 처리 끝과 완료 시각은 2.0이다(부동소수 오차 수준). step 시작 시점의 사건(명령 적용, `jobSpawned`, `jobArrived`, `processStarted`, `processCancelled`, `warning`)은 `simTime`으로 기록한다. 이 계산은 `rules.stepEndTime`에만 두고, step 8단계의 `simTime` 갱신도 같은 함수를 쓴다.
 
 ### 2.3 작업 상태 머신
 
@@ -51,6 +52,7 @@
 ### 2.4 모듈 규칙
 
 - `capacity`: 동시에 처리할 수 있는 작업 수. 기본값은 1.
+- **용량 N 모듈은 슬롯 N개가 각각 독립적으로 처리하는 병렬 모듈이다(확정).** 각 작업은 자기 `progress`로 `processTime`을 따로 세며, 다른 슬롯의 작업이 끝나기를 기다리지 않는다.
 - 꽉 찬 모듈에 배치하면 **모듈 앞 대기열(queue)**에 들어간다. 대기열 길이 상한은 설정 가능하고 기본값은 무제한이다.
 - 이미 얻은 결과를 다시 얻으려 하거나, 필요 없는 결과를 주는 모듈에 배치하는 것은 **허용**하되 경고 표시만 한다(시간 낭비도 평가 대상이기 때문).
 
@@ -132,7 +134,7 @@ interface Module {
   capacity: number;                // 기본값 1
   slots: JobId[];                  // 처리 중이거나 DONE_AT_MODULE인 작업
   queue: JobId[];                  // 대기열
-  busyTime: number;                // 가동률 계산용 누적 시간
+  busyTime: number;                // 슬롯 단위 누적 가동 시간: step마다 (처리 중 슬롯 수 × dt)를 더한다
 }
 
 type JobState = "POOL" | "MOVING" | "QUEUED" | "PROCESSING" | "DONE_AT_MODULE" | "COMPLETED";
@@ -145,7 +147,7 @@ interface Job {
   location: { kind: "pool" } | { kind: "module"; moduleId: ModuleId };
   progress: number;                // 현재 처리 경과 시간
   createdAt: number;               // 등장 시각 (simTime)
-  completedAt?: number;
+  completedAt?: number;            // 완료 시각 = 완료된 step이 끝난 뒤의 시각 (simTime + dt, §2.2-6)
 }
 
 type Command =
@@ -231,9 +233,9 @@ interface Scenario {
   2. 새로 도착하는 작업을 생성한다(arrival 설정에 따라).
   3. `MOVING` 작업을 진행시키고, 도착하면 슬롯이나 대기열에 넣는다.
   4. 대기열 → 빈 슬롯으로 옮긴다(FIFO).
-  5. `PROCESSING` 작업의 `progress += dt`. `progress >= processTime`이면 결과를 획득하고 `DONE_AT_MODULE`로 바꾼다.
-  6. 완료를 판정해서 `COMPLETED`로 바꾸고, 슬롯에서 빼고, `completedCount++` 한다.
-  7. 지표를 갱신한다.
+  5. `PROCESSING` 작업의 `progress += dt`. `progress >= processTime`이면 결과를 획득하고 `DONE_AT_MODULE`로 바꾼다. `processFinished` 시각은 `simTime + dt`(§2.2-6).
+  6. 완료를 판정해서 `COMPLETED`로 바꾸고, 슬롯에서 빼고, `completedCount++` 한다. `completedAt`과 `jobCompleted` 시각은 `simTime + dt`.
+  7. 지표를 갱신한다. 모듈 `busyTime += 처리 중 슬롯 수 × dt`.
   8. `simTime += dt`
 - 정책 감독관은 매 step 호출하고, 수동 감독관은 사용자 입력이 쌓인 만큼 명령을 반환한다.
 
@@ -269,7 +271,7 @@ interface Scenario {
 | 완료 수 | `completedCount` |
 | 처리량 | 완료 수 / simTime |
 | 평균 소요 시간 | 평균(`completedAt - createdAt`) |
-| 모듈 가동률 | 모듈별 `PROCESSING` 시간 / simTime |
+| 모듈 가동률 | 모듈별 `busyTime / (simTime × capacity)`. `busyTime`은 슬롯 단위 가동 시간(처리 중 슬롯 수 × dt의 누적)이라, 용량 2 모듈에서 두 작업이 처리 중이면 step마다 2·dt가 쌓인다. `DONE_AT_MODULE` 점유 시간은 넣지 않는다(점유 낭비로 따로 센다). 범위 0~1 |
 | 점유 낭비 | 모듈별 `DONE_AT_MODULE` 상태로 점유된 시간 (감독관이 늦게 옮긴 정도) |
 | 대기 시간 | 대기 구역 체류 시간과 모듈 대기열 체류 시간 |
 | 헛된 처리 | 필요 없거나 이미 가진 결과를 위해 처리한 횟수 |
@@ -305,7 +307,8 @@ interface Scenario {
 
 ## 11. 테스트 기준 (M1에서 반드시 통과)
 
-- 처리 시간 `t`인 모듈에 배치하면 정확히 `t` 후(dt 오차 이내)에 결과를 얻는다.
+- 처리 시간 `t`인 모듈에 배치하면 정확히 `t` 후(dt 오차 이내)에 결과를 얻는다. `t`가 dt의 배수이면 `processFinished`/`completedAt` 시각은 배치 시각 + `t`와 부동소수 오차 수준으로 같다(§2.2-6).
+- 용량 N 모듈은 N개 작업을 각자의 `progress`로 병렬 처리하고, `busyTime`은 처리 중 슬롯 수 × dt씩 늘어난다.
 - `required`를 모두 얻은 순간 완료되고, 화면과 상태에서 제거되며 `completedCount`가 증가한다.
 - 용량이 꽉 찬 모듈에 배치하면 대기열에 들어가고 FIFO로 처리된다.
 - `occupyWhenDone = true`이면 옮기기 전까지 다음 작업이 시작되지 않는다.

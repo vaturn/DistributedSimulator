@@ -90,6 +90,21 @@ export function hasEvent(events: SimEvent[], type: SimEvent["type"], jobId?: str
   return events.some((e) => e.type === type && (jobId === undefined || ("jobId" in e && e.jobId === jobId)));
 }
 
+/** 이벤트 목록에서 조건에 맞는 첫 이벤트를 찾는다. 없으면 예외. */
+export function findEvent(events: SimEvent[], type: SimEvent["type"], jobId?: string): SimEvent {
+  const found = events.find((e) => e.type === type && (jobId === undefined || ("jobId" in e && e.jobId === jobId)));
+  if (!found) throw new Error(`이벤트 ${type}${jobId ? ` (${jobId})` : ""} 없음`);
+  return found;
+}
+
+/** step별 이벤트 목록을 하나로 합친다. */
+export function flatEvents(eventsPerStep: SimEvent[][]): SimEvent[] {
+  return eventsPerStep.flat();
+}
+
+/** 시각 비교 자릿수 (toBeCloseTo). 부동소수 누적 오차 수준만 허용한다. */
+export const TIME_DIGITS = 9;
+
 /**
  * 값을 깊은 복사한다. Map/Set/배열/평범한 객체를 복사하고 함수(규칙 구현 등)는 참조를 유지한다.
  * structuredClone은 함수를 복사하지 못하므로 직접 구현한다.

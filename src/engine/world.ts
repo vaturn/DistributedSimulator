@@ -2,7 +2,7 @@
 // 이 파일은 상태 전이의 "순서"와 "기록"만 담당하고, 판정·계산은 모두 world.rules에 맡긴다.
 
 import { nextRandom, seedToState } from "./rng";
-import { mergeRules } from "./rules";
+import { mergeRules, stepEndTime } from "./rules";
 import type {
   ArrivalSpec,
   Command,
@@ -257,7 +257,7 @@ function advanceProcessing(world: WorldState, dt: number): Map<ModuleId, number>
           job.acquired.add(r);
         }
         job.state = "DONE_AT_MODULE";
-        emit(world, { type: "processFinished", jobId, moduleId: module.id, t: world.simTime });
+        emit(world, { type: "processFinished", jobId, moduleId: module.id, t: stepEndTime(world, dt) });
       }
     }
     processed.set(module.id, count);
@@ -266,7 +266,8 @@ function advanceProcessing(world: WorldState, dt: number): Map<ModuleId, number>
 }
 
 /** 6. 완료 판정. 완료된 작업은 슬롯에서 빼고 completedCount를 올린다. */
-function resolveCompletions(world: WorldState): void {
+function resolveCompletions(world: WorldState, dt: number): void {
+  const t = stepEndTime(world, dt);
   for (const module of world.modules.values()) {
     for (const jobId of [...module.slots]) {
       const job = world.jobs.get(jobId);
@@ -274,10 +275,10 @@ function resolveCompletions(world: WorldState): void {
       if (world.rules.isJobComplete(world, job)) {
         removeFrom(module.slots, jobId);
         job.state = "COMPLETED";
-        job.completedAt = world.simTime;
+        job.completedAt = t;
         job.progress = 0;
         world.completedCount++;
-        emit(world, { type: "jobCompleted", jobId, moduleId: module.id, t: world.simTime });
+        emit(world, { type: "jobCompleted", jobId, moduleId: module.id, t });
       } else if (world.rules.releaseWhenDone(world, job, module)) {
         removeFrom(module.slots, jobId);
         sendToPool(job);
@@ -307,11 +308,11 @@ export function step(world: WorldState, commands: Command[], dt: number = world.
   // 5. 처리 진행
   const processed = advanceProcessing(world, dt);
   // 6. 완료 판정
-  resolveCompletions(world);
+  resolveCompletions(world, dt);
   // 7. 지표 갱신
   updateMetrics(world, processed, dt);
-  // 8. 시간 진행
-  world.simTime += dt;
+  // 8. 시간 진행 (완료 시각과 같은 계산을 쓴다)
+  world.simTime = stepEndTime(world, dt);
 }
 
 /** 종료 조건에 도달했는가 (판정은 규칙에 위임) */

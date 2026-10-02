@@ -19,6 +19,18 @@ export type { RuleSet, RuleCheck } from "./types";
 /** 부동소수점 비교 허용 오차 (시간 비교용) */
 export const EPSILON = 1e-9;
 
+// ---------- 시각 ----------
+
+/**
+ * step이 끝난 뒤의 시각. step 하나는 구간 [simTime, simTime + dt]를 진행한다.
+ * 진행이 끝나서 생기는 사건(processFinished, jobCompleted, completedAt)은 이 시각으로 기록한다.
+ * step 시작 시점의 사건(명령, 도착, 처리 시작, 취소, 경고)은 simTime으로 기록한다.
+ * step 8단계의 simTime 갱신도 이 함수를 써서 완료 시각과 다음 simTime이 정확히 같게 한다.
+ */
+export function stepEndTime(world: WorldState, dt: number): number {
+  return world.simTime + dt;
+}
+
 // ---------- 처리 ----------
 
 /** 처리 시간: 모듈의 고정 처리 시간 (§9 기본값: 무작위성 없음) */
@@ -193,9 +205,12 @@ function arrivals(world: WorldState, dt: number, random: () => number): JobSpec[
 
 // ---------- 지표와 종료 ----------
 
-/** 이번 step에 처리 중인 작업이 하나라도 있었으면 dt만큼 가동한 것으로 센다. */
+/**
+ * 슬롯 단위 가동 시간: 이번 step에 처리 중이던 슬롯 수 × dt.
+ * 용량 N 모듈은 슬롯 N개가 독립적으로 처리하므로, 가동률 = busyTime / (simTime × capacity) (§8).
+ */
 function busyTimeDelta(_world: WorldState, _module: Module, processedCount: number, dt: number): number {
-  return processedCount > 0 ? dt : 0;
+  return processedCount * dt;
 }
 
 function isEnded(world: WorldState): boolean {

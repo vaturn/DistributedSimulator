@@ -7,7 +7,10 @@ import { createRng } from "../src/engine/rng";
 import { apply, createWorld, isEnded, step } from "../src/engine/world";
 import {
   EPS,
+  TIME_DIGITS,
   assign,
+  findEvent,
+  flatEvents,
   hasEvent,
   job,
   makeScenario,
@@ -98,6 +101,188 @@ describe.each(RULE_SETS)("엔진 (%s)", (_name, rules) => {
     });
   });
 
+  describe("완료·처리 시각 = step이 끝난 뒤의 시각", () => {
+    it.each([
+      { processTime: 2, dt: 0.1 },
+      { processTime: 0.5, dt: 0.1 },
+      { processTime: 3, dt: 0.25 },
+      { processTime: 1.2, dt: 0.2 },
+      { processTime: 1.3, dt: 0.2 },
+    ])(
+      "processTime=$processTime, dt=$dt 를 t=0에 배치하면 processFinished·jobCompleted·completedAt이 ceil(t/dt)·dt이다",
+      ({ processTime, dt }) => {
+        const world = make(
+          makeScenario({
+            modules: [{ id: MA, resultType: RA, processTime }],
+            initial: [[RA]],
+            config: { dt },
+          }),
+        );
+        const steps = Math.ceil(processTime / dt - EPS);
+        const expectedTime = steps * dt;
+        const events = runSteps(world, steps, { 0: [assign("J1", MA)] });
+        const all = flatEvents(events);
+
+        expect(findEvent(all, "processStarted", "J1").t).toBe(0);
+        // 마지막 step에서 처리와 완료가 함께 일어난다
+        expect(hasEvent(events[steps - 1]!, "processFinished", "J1")).toBe(true);
+        expect(hasEvent(events[steps - 1]!, "jobCompleted", "J1")).toBe(true);
+        expect(findEvent(all, "processFinished", "J1").t).toBeCloseTo(expectedTime, TIME_DIGITS);
+        expect(findEvent(all, "jobCompleted", "J1").t).toBeCloseTo(expectedTime, TIME_DIGITS);
+        expect(job(world, "J1").completedAt!).toBeCloseTo(expectedTime, TIME_DIGITS);
+        // step 끝 시각과 다음 simTime은 같은 계산이다
+        expect(job(world, "J1").completedAt).toBe(world.simTime);
+      },
+    );
+
+    it("처리 시간 2인 작업을 t=0에 배치하면 완료 시각이 정확히 2.0이다", () => {
+      const world = make(
+        makeScenario({
+          modules: [{ id: MA, resultType: RA, processTime: 2 }],
+          initial: [[RA]],
+          config: { dt: 0.1 },
+        }),
+      );
+      const all = flatEvents(runSteps(world, 20, { 0: [assign("J1", MA)] }));
+      expect(findEvent(all, "processFinished", "J1").t).toBeCloseTo(2, TIME_DIGITS);
+      expect(findEvent(all, "jobCompleted", "J1").t).toBeCloseTo(2, TIME_DIGITS);
+      expect(job(world, "J1").completedAt!).toBeCloseTo(2, TIME_DIGITS);
+      expect(job(world, "J1").state).toBe("COMPLETED");
+    });
+
+    it("완료되지 않는 처리 끝(processFinished)도 step 끝 시각으로 기록한다", () => {
+      const world = make(
+        makeScenario({
+          modules: [{ id: MA, resultType: RA, processTime: 2 }],
+          initial: [[RA, RB]],
+          config: { dt: 0.1 },
+        }),
+      );
+      const all = flatEvents(runSteps(world, 25, { 0: [assign("J1", MA)] }));
+      expect(findEvent(all, "processFinished", "J1").t).toBeCloseTo(2, TIME_DIGITS);
+      expect(hasEvent(all, "jobCompleted", "J1")).toBe(false);
+      expect(job(world, "J1").completedAt).toBeUndefined();
+    });
+
+    it("t=0.5에 배치하면 처리 시간 1 뒤인 1.5에 완료된다", () => {
+      const world = make(
+        makeScenario({
+          modules: [{ id: MA, resultType: RA, processTime: 1 }],
+          initial: [[RA]],
+          config: { dt: 0.1 },
+        }),
+      );
+      const all = flatEvents(runSteps(world, 15, { 5: [assign("J1", MA)] }));
+      expect(findEvent(all, "processStarted", "J1").t).toBeCloseTo(0.5, TIME_DIGITS);
+      expect(findEvent(all, "processFinished", "J1").t).toBeCloseTo(1.5, TIME_DIGITS);
+      expect(job(world, "J1").completedAt!).toBeCloseTo(1.5, TIME_DIGITS);
+    });
+
+    it("대기열에서 이어 받은 작업은 앞 작업 완료 시각부터 처리 시간 뒤에 완료된다", () => {
+      const world = make(
+        makeScenario({
+          modules: [{ id: MA, resultType: RA, processTime: 1 }],
+          initial: [[RA], [RA]],
+          config: { dt: 0.1 },
+        }),
+      );
+      const all = flatEvents(runSteps(world, 20, { 0: [assign("J1", MA), assign("J2", MA)] }));
+      expect(job(world, "J1").completedAt!).toBeCloseTo(1, TIME_DIGITS);
+      expect(findEvent(all, "processStarted", "J2").t).toBeCloseTo(1, TIME_DIGITS);
+      expect(job(world, "J2").completedAt!).toBeCloseTo(2, TIME_DIGITS);
+    });
+  });
+
+  describe("용량 N = 독립 슬롯 N개의 병렬 처리", () => {
+    it("capacity 2 모듈의 두 슬롯은 각자의 progress로 처리 시간을 따로 센다", () => {
+      const world = make(
+        makeScenario({
+          modules: [{ id: MA, resultType: RA, processTime: 1, capacity: 2 }],
+          initial: [[RA], [RA]],
+          config: { dt: 0.1 },
+        }),
+      );
+      // J1은 t=0, J2는 t=0.5에 배치
+      const events = runSteps(world, 8, { 0: [assign("J1", MA)], 5: [assign("J2", MA)] });
+      expect(world.simTime).toBeCloseTo(0.8, TIME_DIGITS);
+      expect(job(world, "J1").state).toBe("PROCESSING");
+      expect(job(world, "J2").state).toBe("PROCESSING");
+      expect(job(world, "J1").progress).toBeCloseTo(0.8, TIME_DIGITS);
+      expect(job(world, "J2").progress).toBeCloseTo(0.3, TIME_DIGITS);
+      expect(findEvent(flatEvents(events), "processStarted", "J2").t).toBeCloseTo(0.5, TIME_DIGITS);
+
+      runSteps(world, 10);
+      // 앞 작업이 끝나기를 기다리지 않고 각자 처리 시간 1 뒤에 완료된다
+      expect(job(world, "J1").completedAt!).toBeCloseTo(1, TIME_DIGITS);
+      expect(job(world, "J2").completedAt!).toBeCloseTo(1.5, TIME_DIGITS);
+    });
+
+    it("두 슬롯이 처리 중이면 busyTime이 step마다 2·dt씩 늘어난다", () => {
+      const dt = 0.1;
+      const world = make(
+        makeScenario({
+          modules: [{ id: MA, resultType: RA, processTime: 1, capacity: 2 }],
+          // 결과를 얻어도 완료되지 않고 DONE_AT_MODULE로 머물게 한다
+          initial: [[RA, RB], [RA, RB]],
+          config: { dt },
+        }),
+      );
+      step(world, [assign("J1", MA), assign("J2", MA)]);
+      expect(mod(world, MA).busyTime).toBeCloseTo(2 * dt, TIME_DIGITS);
+      for (let i = 2; i <= 10; i++) {
+        const before = mod(world, MA).busyTime;
+        step(world, []);
+        expect(mod(world, MA).busyTime - before).toBeCloseTo(2 * dt, TIME_DIGITS);
+      }
+      // 처리 시간 1 × 슬롯 2 = 2
+      expect(mod(world, MA).busyTime).toBeCloseTo(2, TIME_DIGITS);
+      // 가동률 = busyTime / (simTime × capacity) = 100%
+      const m = mod(world, MA);
+      expect(m.busyTime / (world.simTime * m.capacity)).toBeCloseTo(1, TIME_DIGITS);
+
+      // DONE_AT_MODULE로 점유 중인 슬롯은 가동 시간에 들어가지 않는다
+      runSteps(world, 10);
+      expect(job(world, "J1").state).toBe("DONE_AT_MODULE");
+      expect(mod(world, MA).busyTime).toBeCloseTo(2, TIME_DIGITS);
+      expect(m.busyTime / (world.simTime * m.capacity)).toBeCloseTo(0.5, TIME_DIGITS);
+    });
+
+    it("capacity 2에 한 작업만 처리 중이면 busyTime은 step마다 dt씩 늘어난다", () => {
+      const dt = 0.1;
+      const world = make(
+        makeScenario({
+          modules: [{ id: MA, resultType: RA, processTime: 1, capacity: 2 }],
+          initial: [[RA], [RA]],
+          config: { dt },
+        }),
+      );
+      // J1: t=0~1, J2: t=0.5~1.5 → 겹치는 0.5~1.0 동안만 2·dt
+      const busyPerStep: number[] = [];
+      for (let i = 0; i < 20; i++) {
+        const before = mod(world, MA).busyTime;
+        step(world, i === 0 ? [assign("J1", MA)] : i === 5 ? [assign("J2", MA)] : []);
+        busyPerStep.push(mod(world, MA).busyTime - before);
+      }
+      busyPerStep.forEach((delta, i) => {
+        const slots = (i < 10 ? 1 : 0) + (i >= 5 && i < 15 ? 1 : 0);
+        expect(delta).toBeCloseTo(slots * dt, TIME_DIGITS);
+      });
+      expect(mod(world, MA).busyTime).toBeCloseTo(2, TIME_DIGITS);
+    });
+
+    it("capacity 1 모듈의 busyTime은 처리 시간과 같다", () => {
+      const world = make(
+        makeScenario({
+          modules: [{ id: MA, resultType: RA, processTime: 1.5 }],
+          initial: [[RA]],
+          config: { dt: 0.1 },
+        }),
+      );
+      runSteps(world, 30, { 0: [assign("J1", MA)] });
+      expect(mod(world, MA).busyTime).toBeCloseTo(1.5, TIME_DIGITS);
+    });
+  });
+
   describe("§11-2 완료", () => {
     it("required를 모두 얻은 순간 COMPLETED가 되고 모듈에서 빠지며 completedCount가 증가한다", () => {
       const world = make(
@@ -125,6 +310,9 @@ describe.each(RULE_SETS)("엔진 (%s)", (_name, rules) => {
       expect(j.completedAt).toBeDefined();
       expect(j.completedAt!).toBeGreaterThanOrEqual(before - EPS);
       expect(j.completedAt!).toBeLessThanOrEqual(world.simTime + EPS);
+      // 완료 시각은 완료된 step이 끝난 뒤의 시각이다 (처리 시간 1 → 1.0)
+      expect(j.completedAt!).toBe(world.simTime);
+      expect(j.completedAt!).toBeCloseTo(1, TIME_DIGITS);
       // 모듈에서 제거된다
       expect(mod(world, MA).slots).not.toContain("J1");
       expect(mod(world, MA).queue).not.toContain("J1");
