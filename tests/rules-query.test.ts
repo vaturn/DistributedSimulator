@@ -144,6 +144,24 @@ describe("estimatedWaitTime", () => {
     expect(estimatedWaitTime(w, MA, { extraJobIds: ["J2"] })).toBeCloseTo(4.9, 9);
   });
 
+  it.each([0.1, 0.25, 0.5])("moveTime=%s: 이동 중 작업의 예상 대기 시간이 실제 처리 완료 시각과 dt 격자 오차 이내로 맞는다", (moveTime) => {
+    const w = world3([[RA]], { moveTime, dt: 0.1 });
+    step(w, [assign("J1", MA)]);
+    const estimate = estimatedWaitTime(w, MA);
+    const now = w.simTime;
+    let finishedAt: number | null = null;
+    for (let i = 0; i < 40 && finishedAt === null; i++) {
+      step(w, []);
+      const e = w.events.find((ev) => ev.type === "processFinished");
+      if (e) finishedAt = e.t;
+    }
+    expect(finishedAt).not.toBeNull();
+    const actual = (finishedAt ?? 0) - now;
+    // 실제는 도착을 dt 격자로 올리므로 예상보다 짧지 않고, dt보다 많이 늦지 않다
+    expect(actual).toBeGreaterThanOrEqual(estimate - 1e-9);
+    expect(actual).toBeLessThan(estimate + 0.1);
+  });
+
   it("없는 모듈이면 Infinity, 월드를 바꾸지 않는다", () => {
     const w = world3([[RA], [RA]]);
     step(w, [assign("J1", MA), assign("J2", MA)]);
@@ -235,6 +253,34 @@ describe("moveProgressRatio", () => {
     moveProgressRatio(w, "J1");
     processProgressRatio(w, "J1");
     expect(w).toEqual(before);
+  });
+});
+
+describe("advanceMove (이동 시간 규칙)", () => {
+  const move = (remaining: number) => ({ from: { kind: "pool" as const }, moduleId: MA, remaining, total: 1 });
+
+  it("step 시작에 남은 이동 시간이 0 이하면 도착, 아니면 dt만큼 이동한 남은 시간을 돌려준다", () => {
+    const w = world3([[RA]]);
+    expect(w.rules.advanceMove(w, move(0), 0.1)).toEqual({ arrived: true });
+    expect(w.rules.advanceMove(w, move(-0.05), 0.1)).toEqual({ arrived: true });
+    expect(w.rules.advanceMove(w, move(1e-12), 0.1)).toEqual({ arrived: true });
+    const r = w.rules.advanceMove(w, move(0.1), 0.1);
+    expect(r.arrived).toBe(false);
+    if (!r.arrived) expect(r.remaining).toBeCloseTo(0, 9);
+    const r2 = w.rules.advanceMove(w, move(0.05), 0.1);
+    expect(r2.arrived).toBe(false);
+    if (!r2.arrived) expect(r2.remaining).toBeCloseTo(-0.05, 9);
+  });
+
+  it("교체한 advanceMove 규칙을 step이 쓴다", () => {
+    const w = createWorld(
+      makeScenario({ modules: [{ id: MA, resultType: RA, processTime: 2 }], initial: [[RA]] }),
+      { rules: mergeRules({ advanceMove: (_w, m) => ({ arrived: false, remaining: m.remaining }) }) },
+    );
+    // 이동 시간 0이어도 교체한 규칙이 도착시키지 않으므로 계속 이동 중이다
+    runSteps(w, 10, { 0: [assign("J1", MA)] });
+    expect(w.jobs.get("J1")?.state).toBe("MOVING");
+    expect(w.moves.has("J1")).toBe(true);
   });
 });
 

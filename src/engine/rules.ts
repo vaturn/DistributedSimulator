@@ -9,6 +9,7 @@ import type {
   Module,
   ModuleId,
   MoveInfo,
+  MoveStep,
   ResultType,
   RuleCheck,
   RuleSet,
@@ -162,8 +163,22 @@ function moveTime(world: WorldState, _job: Job, _moduleId: ModuleId): number {
   return world.config.moveTime;
 }
 
+/** 남은 이동 시간이 0 이하면 도착 (부동소수 오차는 EPSILON으로 흡수) */
 function isMoveFinished(_world: WorldState, move: MoveInfo): boolean {
   return move.remaining <= EPSILON;
+}
+
+/**
+ * 이동 시간 규칙 (확정, 기획서 §2.3·§6):
+ * 배치 시각 t0에 이동을 시작하면 도착 시각은 t0 + moveTime 이상인 첫 step 시작 시각(dt 격자로 올림)이다.
+ * 도착을 step 시작에서 먼저 판정하고, 도착하지 않았을 때만 이번 step 동안 이동을 진행한다.
+ * 그래서 이동한 step에는 처리가 진행되지 않고, 처리는 도착한 step부터 센다
+ * (완료 시각 ≈ t0 + moveTime + processTime, 체계적으로 짧아지지 않는다).
+ * moveTime = 0이면 배치한 step 시작에 바로 도착한다(같은 step에 처리 시작).
+ */
+function advanceMove(world: WorldState, move: MoveInfo, dt: number): MoveStep {
+  if (world.rules.isMoveFinished(world, move)) return { arrived: true };
+  return { arrived: false, remaining: move.remaining - dt };
 }
 
 function hasFreeSlot(_world: WorldState, module: Module): boolean {
@@ -266,6 +281,7 @@ export const defaultRules: RuleSet = Object.freeze({
   cancelsOnMove,
   moveTime,
   isMoveFinished,
+  advanceMove,
   hasFreeSlot,
   selectNextFromQueue,
   arrivals,

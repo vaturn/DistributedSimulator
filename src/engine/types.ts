@@ -130,6 +130,9 @@ export interface MoveInfo {
   total: number;
 }
 
+/** step 한 번의 이동 처리 결과 (RuleSet.advanceMove) */
+export type MoveStep = { arrived: true } | { arrived: false; remaining: number };
+
 /**
  * 배치 명령이 실제로 할 일.
  * - move: 목적지 모듈로 이동한다(다른 모듈 또는 대기 구역에서 온 작업).
@@ -176,8 +179,14 @@ export interface RuleSet {
   cancelsOnMove(world: WorldState, job: Job): boolean;
   /** 모듈까지 이동 시간 */
   moveTime(world: WorldState, job: Job, moduleId: ModuleId): number;
-  /** 이동이 끝났는가 */
+  /** 이동이 끝났는가 (step 시작 시각에 이미 목적지에 도착해 있는가) */
   isMoveFinished(world: WorldState, move: MoveInfo): boolean;
+  /**
+   * step 3단계의 이동 처리. 이번 step 시작 시각에 도착했으면 arrived=true(이번 step부터 처리할 수 있다),
+   * 아니면 이번 step 구간 [simTime, simTime + dt] 동안 이동한 뒤의 남은 이동 시간을 돌려준다.
+   * 이동 판정은 이 함수에만 둔다(world.ts는 결과를 반영만 한다).
+   */
+  advanceMove(world: WorldState, move: MoveInfo, dt: number): MoveStep;
   /** 모듈에 빈 슬롯이 있는가 */
   hasFreeSlot(world: WorldState, module: Module): boolean;
   /** 대기열에서 다음에 슬롯으로 들어갈 작업 (기본 FIFO). 없으면 null */

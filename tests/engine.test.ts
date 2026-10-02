@@ -391,6 +391,112 @@ describe.each(RULE_SETS)("엔진 (%s)", (_name, rules) => {
     });
   });
 
+  describe("이동 시간 (moveTime > 0): 도착 = 배치 시각 + moveTime 이후 첫 step 시작", () => {
+    const DT = 0.1;
+    const PROCESS = 1;
+    const moveScenario = (moveTime: number, extra: Partial<Scenario["config"]> = {}): Scenario =>
+      makeScenario({
+        modules: [{ id: MA, resultType: RA, processTime: PROCESS, capacity: 1 }],
+        initial: [[RA], [RA], [RA]],
+        config: { dt: DT, moveTime, ...extra },
+      });
+
+    it.each([
+      // [이름, moveTime, 예상 도착 시각(배치 시각 기준), 앞서 돌릴 step 수]
+      ["moveTime = 0", 0, 0, 0],
+      ["moveTime = dt", DT, DT, 0],
+      ["moveTime = 2.5·dt", 2.5 * DT, 3 * DT, 0],
+      ["moveTime = 0.5", 0.5, 0.5, 0],
+      ["moveTime = 2.5·dt (배치 시각이 0이 아님)", 2.5 * DT, 3 * DT, 7],
+    ] as const)("%s: 도착·처리 시작·완료 시각", (_label, moveTime, arrivalDelay, warmup) => {
+      const world = make(moveScenario(moveTime));
+      runSteps(world, warmup);
+      const t0 = world.simTime;
+      const events = flatEvents(runSteps(world, 40, { 0: [assign("J1", MA)] }));
+
+      const arrived = findEvent(events, "jobArrived", "J1").t;
+      const started = findEvent(events, "processStarted", "J1").t;
+      const finished = findEvent(events, "processFinished", "J1").t;
+      const completed = findEvent(events, "jobCompleted", "J1").t;
+      // 연속 시간 기준: 도착 ≥ t0 + moveTime (dt 격자로 올림), 처리는 도착 시각부터 센다.
+      expect(arrived).toBeCloseTo(t0 + arrivalDelay, TIME_DIGITS);
+      expect(arrived).toBeGreaterThanOrEqual(t0 + moveTime - EPS);
+      expect(arrived).toBeLessThan(t0 + moveTime + DT);
+      expect(started).toBeCloseTo(arrived, TIME_DIGITS);
+      expect(finished).toBeCloseTo(arrived + PROCESS, TIME_DIGITS);
+      expect(finished).toBeGreaterThanOrEqual(t0 + moveTime + PROCESS - EPS);
+      expect(finished).toBeLessThan(t0 + moveTime + PROCESS + DT);
+      expect(completed).toBeCloseTo(finished, TIME_DIGITS);
+      expect(job(world, "J1").completedAt).toBeCloseTo(finished, TIME_DIGITS);
+    });
+
+    it("moveTime = 0이면 배치 시각 + processTime에 정확히 끝난다", () => {
+      const world = make(moveScenario(0));
+      runSteps(world, 3);
+      const t0 = world.simTime;
+      const events = flatEvents(runSteps(world, 20, { 0: [assign("J1", MA)] }));
+      expect(findEvent(events, "jobArrived", "J1").t).toBeCloseTo(t0, TIME_DIGITS);
+      expect(findEvent(events, "processFinished", "J1").t).toBeCloseTo(t0 + PROCESS, TIME_DIGITS);
+    });
+
+    it("moveTime = dt이면 배치한 step에는 도착하지 않고, 다음 step 시작에 도착한다", () => {
+      const world = make(moveScenario(DT));
+      step(world, [assign("J1", MA)]);
+      expect(job(world, "J1").state).toBe("MOVING");
+      expect(job(world, "J1").progress).toBe(0);
+      expect(hasEvent(world.events, "jobArrived", "J1")).toBe(false);
+      expect(world.moves.get("J1")?.remaining).toBeCloseTo(0, TIME_DIGITS);
+
+      step(world, []);
+      expect(findEvent(world.events, "jobArrived", "J1").t).toBeCloseTo(DT, TIME_DIGITS);
+      expect(job(world, "J1").state).toBe("PROCESSING");
+      // 도착한 step의 처리분만 있다
+      expect(job(world, "J1").progress).toBeCloseTo(DT, TIME_DIGITS);
+    });
+
+    it("moveTime = 2.5·dt이면 남은 이동 시간이 0이 될 때까지 MOVING이다", () => {
+      const world = make(moveScenario(2.5 * DT));
+      const states = runSteps(world, 3, { 0: [assign("J1", MA)] }).map(
+        (evs) => hasEvent(evs, "jobArrived", "J1"),
+      );
+      expect(states).toEqual([false, false, false]);
+      expect(job(world, "J1").state).toBe("MOVING");
+      step(world, []);
+      expect(hasEvent(world.events, "jobArrived", "J1")).toBe(true);
+      expect(world.events.find((e) => e.type === "jobArrived")?.t).toBeCloseTo(3 * DT, TIME_DIGITS);
+    });
+
+    it("moveTime = dt인 작업을 다음 step에 회수하면 도착 전에 POOL로 돌아가고 처리 취소가 없다", () => {
+      const world = make(moveScenario(DT));
+      step(world, [assign("J1", MA)]);
+      step(world, [unassign("J1")]);
+      expect(job(world, "J1").state).toBe("POOL");
+      expect(world.moves.has("J1")).toBe(false);
+      expect(hasEvent(world.events, "jobArrived", "J1")).toBe(false);
+      expect(hasEvent(world.events, "processCancelled", "J1")).toBe(false);
+      expect(mod(world, MA).slots).toEqual([]);
+      const later = flatEvents(runSteps(world, 10));
+      expect(hasEvent(later, "jobArrived", "J1")).toBe(false);
+    });
+
+    it("대기열 상한은 도착 직전 step의 이동 중 작업도 세고, 도착해도 이중으로 세지 않는다", () => {
+      const world = make(moveScenario(DT, { queueLimit: 1 }));
+      step(world, [assign("J1", MA)]);
+      // J1은 아직 이동 중(남은 0)이다: 자리 1 < 용량 1 + 상한 1
+      step(world, [assign("J2", MA)]);
+      expect(hasEvent(world.events, "warning")).toBe(false);
+      expect(job(world, "J1").state).toBe("PROCESSING");
+      expect(job(world, "J2").state).toBe("MOVING");
+      // J1 슬롯 + J2 이동 중 = 2 → 상한 초과 경고 (배치는 수행)
+      step(world, [assign("J3", MA)]);
+      expect(hasEvent(world.events, "warning")).toBe(true);
+      expect(job(world, "J2").state).toBe("QUEUED");
+      expect(job(world, "J3").state).toBe("MOVING");
+      step(world, []);
+      expect(mod(world, MA).queue).toEqual(["J2", "J3"]);
+    });
+  });
+
   describe("§11-3 대기열 FIFO", () => {
     it("용량이 꽉 찬 모듈에 배치하면 QUEUED가 되고 배치 순서대로 처리된다", () => {
       const world = make(

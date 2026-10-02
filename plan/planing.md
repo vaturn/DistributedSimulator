@@ -47,6 +47,9 @@
 ```
 
 - `MOVING`: 이동 애니메이션 중인 상태. 기본 이동 시간은 0이고 설정으로 바꿀 수 있다(§9).
+  - **이동 시간 규칙(확정)**: 시각 `t0`에 배치하면 도착 시각은 `t0 + moveTime` 이상인 첫 step 시작 시각이다(dt 격자로 올림). 처리는 도착한 step부터 세므로 처리 완료 시각은 `도착 시각 + processTime`(≈ `t0 + moveTime + processTime`, dt 격자 오차 이내이고 체계적으로 짧아지지 않는다). 이동한 step에는 처리가 진행되지 않는다.
+  - `moveTime = 0`이면 배치한 step에 바로 도착해 처리를 시작하고, 완료 시각은 `t0 + processTime`이다.
+  - 예(dt = 0.1): `moveTime = 0.1`이면 `t0 + 0.1`에 도착, `moveTime = 0.25`면 `t0 + 0.3`에 도착한다.
 - `DONE_AT_MODULE`: 처리는 끝났지만 아직 모듈 위에 있는 상태. 감독관이 옮기기 전까지 **모듈을 점유한다**(기본값, §9 참고).
 - `PROCESSING` 중에 옮기면 처리가 **취소**되고 결과를 얻지 못한다(기본값).
 
@@ -238,7 +241,7 @@ interface Scenario {
 - `step(dt)` 순서(고정, 바꾸지 말 것):
   1. 감독관에게서 Command를 받아 `apply`한다. 잘못된 명령은 무시하고 `warning` 이벤트를 남긴다.
   2. 새로 도착하는 작업을 생성한다(arrival 설정에 따라).
-  3. `MOVING` 작업을 진행시키고, 도착하면 슬롯이나 대기열에 넣는다.
+  3. `MOVING` 작업을 진행시키고, 도착하면 슬롯이나 대기열에 넣는다. step 시작에 남은 이동 시간이 0 이하면 도착(이번 step부터 처리), 아니면 남은 이동 시간에서 dt를 뺀다(§2.3 이동 시간 규칙, `rules.advanceMove`).
   4. 대기열 → 빈 슬롯으로 옮긴다(FIFO).
   5. `PROCESSING` 작업의 `progress += dt`. `progress >= processTime`이면 결과를 획득하고 `DONE_AT_MODULE`로 바꾼다. `processFinished` 시각은 `simTime + dt`(§2.2-7).
   6. 완료를 판정해서 `COMPLETED`로 바꾸고, 슬롯에서 빼고, `completedCount++` 한다. `completedAt`과 `jobCompleted` 시각은 `simTime + dt`.
@@ -295,7 +298,7 @@ interface Scenario {
 |---|---|---|
 | 처리 끝난 작업이 모듈을 계속 점유하는가 (`occupyWhenDone`) | **예**: 감독관이 옮겨야 비워진다 | 자동으로 대기 구역에 복귀 |
 | 처리 중 이동 시 (`cancelOnMove`) | 처리 취소, 결과 없음 | 이동 금지 |
-| 이동 시간 (`moveTime`) | 0 (즉시) | 거리 비례, 고정값 |
+| 이동 시간 (`moveTime`) | 0 (즉시). 0보다 크면 도착은 `배치 시각 + moveTime`을 dt 격자로 올린 step 시작, 처리는 도착부터 센다(확정, §2.3) | 거리 비례, 고정값 |
 | 결과 획득 순서 제약 | 없음 (순서 무관) | 작업마다 순서 지정 (A→B→C) |
 | 모듈 용량 | 1 | 모듈별 지정 |
 | 대기열 상한 (`queueLimit`) | 무제한. 상한을 정해도 초과 배치는 **허용 + warning**(확정, §2.2-6) | — |

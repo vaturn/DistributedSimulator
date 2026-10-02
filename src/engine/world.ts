@@ -225,11 +225,14 @@ function spawnArrivals(world: WorldState, dt: number): void {
   }
 }
 
-/** 3. 이동 중인 작업을 진행시키고, 도착하면 슬롯이나 대기열에 넣는다. */
+/** 3. 이동 중인 작업을 진행시키고, 도착하면 슬롯이나 대기열에 넣는다. 도착 판정은 규칙(advanceMove)에 위임한다. */
 function advanceMoves(world: WorldState, dt: number): void {
   for (const [jobId, move] of [...world.moves]) {
-    move.remaining -= dt;
-    if (!world.rules.isMoveFinished(world, move)) continue;
+    const result = world.rules.advanceMove(world, move, dt);
+    if (!result.arrived) {
+      move.remaining = result.remaining;
+      continue;
+    }
     world.moves.delete(jobId);
     const job = world.jobs.get(jobId);
     const module = world.modules.get(move.moduleId);
