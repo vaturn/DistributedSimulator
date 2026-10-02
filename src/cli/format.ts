@@ -2,7 +2,7 @@
 // 값의 표시 형식은 지표 패널과 같은 ui/metricsFormat.ts의 metricsView를 그대로 쓴다.
 
 import type { Metrics } from "../engine/types";
-import { metricsView } from "../ui/metricsFormat";
+import { EMPTY_VALUE, metricsView } from "../ui/metricsFormat";
 
 /** 실행 정보 (표 머리말) */
 export interface RunInfo {
@@ -78,5 +78,56 @@ export function formatMetricsTable(metrics: Readonly<Metrics>, info?: Readonly<R
     ...view.modules.map((m) => [m.id, m.utilization, m.doneOccupied, m.queueLength]),
   ];
   for (const line of alignRows(moduleRows)) lines.push(`  ${line}`);
+  return lines.join("\n");
+}
+
+/** 비교 표의 한 열 (정책 하나의 지표) */
+export interface CompareColumn {
+  policy: string;
+  metrics: Metrics;
+}
+
+/** 비교 표 머리말 */
+export interface CompareInfo {
+  scenario: string;
+  seed: number;
+}
+
+/** 비교 표의 첫 열 머리글 */
+const COMPARE_LABEL_HEADER = "지표";
+/** 모듈별 행 이름 */
+const MODULE_UTILIZATION_LABEL = "가동률";
+const MODULE_OCCUPIED_LABEL = "점유 낭비";
+
+/**
+ * 여러 정책의 지표를 한 표로 (행: 지표, 열: 정책). 모듈별 가동률·점유 낭비 행을 포함한다.
+ * 모듈 행은 첫 열의 모듈 순서를 따르고, 어떤 정책에 그 모듈이 없으면 "-"로 보인다.
+ */
+export function formatCompareTable(columns: readonly CompareColumn[], info?: Readonly<CompareInfo>): string {
+  const views = columns.map((c) => metricsView(c.metrics));
+  const lines: string[] = [];
+  if (info) {
+    lines.push(`시나리오: ${info.scenario}  시드: ${info.seed}  정책: ${columns.map((c) => c.policy).join(", ")}`);
+    lines.push("");
+  }
+  const rows: string[][] = [[COMPARE_LABEL_HEADER, ...columns.map((c) => c.policy)]];
+  const summary = views[0]?.summary ?? [];
+  for (const row of summary) {
+    rows.push([row.label, ...views.map((v) => v.summary.find((r) => r.key === row.key)?.value ?? EMPTY_VALUE)]);
+  }
+  const moduleIds = views[0]?.modules.map((m) => m.id) ?? [];
+  for (const id of moduleIds) {
+    rows.push([
+      `${MODULE_UTILIZATION_LABEL} ${id}`,
+      ...views.map((v) => v.modules.find((m) => m.id === id)?.utilization ?? EMPTY_VALUE),
+    ]);
+  }
+  for (const id of moduleIds) {
+    rows.push([
+      `${MODULE_OCCUPIED_LABEL} ${id}`,
+      ...views.map((v) => v.modules.find((m) => m.id === id)?.doneOccupied ?? EMPTY_VALUE),
+    ]);
+  }
+  for (const line of alignRows(rows)) lines.push(line);
   return lines.join("\n");
 }

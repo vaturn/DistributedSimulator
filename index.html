@@ -65,6 +65,11 @@
       }
       .ctrl-status { flex-basis: 100%; color: var(--text-dim); font-size: var(--font-size-small); }
       .ctrl-status-ended { color: var(--ended); }
+      .ctrl-status-ok { color: var(--btn-primary); }
+      .ctrl-status-error { color: var(--ended); }
+      .ctrl-status:empty { display: none; }
+      .ctrl-replay-load { flex-basis: 100%; text-align: center; }
+      .ctrl-replay-load:focus-visible { outline: 2px solid var(--btn-primary); }
       .shortcuts { color: var(--text-dim); font-size: var(--font-size-small); margin: 0; }
       kbd {
         font: inherit; border: 1px solid var(--btn-border); border-radius: 3px;
@@ -97,7 +102,7 @@
     </main>
     <aside id="sidebar">
       <section id="controls" aria-label="실행 컨트롤"></section>
-      <section id="session-controls" aria-label="감독관·시나리오 선택과 결과 내보내기"></section>
+      <section id="session-controls" aria-label="감독관·시나리오 선택, 결과 내보내기와 리플레이"></section>
       <p class="shortcuts"><kbd>Space</kbd> 재생/정지 · <kbd>→</kbd> 한 단계 · <kbd>R</kbd> 리셋</p>
       <section id="metrics" aria-label="지표"></section>
     </aside>

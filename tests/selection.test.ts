@@ -7,6 +7,9 @@ import {
   DEFAULT_SUPERVISOR,
   MANUAL_SUPERVISOR,
   parseSelectionQuery,
+  REPLAY_OPTION_VALUE,
+  replaySelectLabels,
+  selectionFromSelectValues,
   resolveSessionConfig,
   scenarioOptions,
   selectionToQuery,
@@ -123,5 +126,37 @@ describe("resolveSessionConfig", () => {
   it("목록에 없는 값이면 오류", () => {
     expect(() => resolveSessionConfig({ supervisor: "x", scenario: "basic" }, POLICIES, SCENARIOS)).toThrow();
     expect(() => resolveSessionConfig({ supervisor: "manual", scenario: "x" }, POLICIES, SCENARIOS)).toThrow();
+  });
+});
+
+describe("리플레이 중 select 표시", () => {
+  const last = { supervisor: "greedy", scenario: "basic" };
+
+  it("표시 옵션 값은 실제 선택 값과 겹치지 않는다", () => {
+    const opts = [...CHOICES.supervisors, ...CHOICES.scenarios];
+    expect(opts.some((o) => o.value === REPLAY_OPTION_VALUE)).toBe(false);
+  });
+
+  it("라벨에 원본의 정책·시나리오 이름을 보여 준다", () => {
+    expect(replaySelectLabels("random", "parallel")).toEqual({
+      supervisor: "리플레이: random",
+      scenario: "리플레이: parallel",
+    });
+  });
+
+  it("리플레이 중 이전과 같은 값을 다시 골라도 그 값이 선택이 된다", () => {
+    expect(selectionFromSelectValues({ supervisor: "greedy", scenario: REPLAY_OPTION_VALUE }, last)).toEqual(last);
+  });
+
+  it("한쪽만 바꾸면 다른 쪽은 마지막 선택을 쓴다", () => {
+    expect(selectionFromSelectValues({ supervisor: REPLAY_OPTION_VALUE, scenario: "parallel" }, last)).toEqual({
+      supervisor: "greedy",
+      scenario: "parallel",
+    });
+  });
+
+  it("표시 옵션이 없으면 select 값을 그대로 쓴다", () => {
+    const values = { supervisor: "manual", scenario: "parallel" };
+    expect(selectionFromSelectValues(values, last)).toEqual(values);
   });
 });

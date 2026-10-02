@@ -30,6 +30,7 @@ import { createExportButton } from "./ui/exportResult";
 import { createMetricsPanel } from "./ui/metricsPanel";
 import {
   parseSelectionQuery,
+  replaySelectLabels,
   resolveSessionConfig,
   scenarioOptions,
   selectionToQuery,
@@ -39,6 +40,8 @@ import {
   type SessionConfig,
 } from "./ui/selection";
 import { createSelectors } from "./ui/selectors";
+import { compareReplay, replaySessionConfig, replayStopStep, type ReplaySource } from "./ui/replay";
+import { createReplayLoader } from "./ui/replayLoader";
 
 /** 요소 id (index.html과 맞춘다) */
 const CANVAS_ID = "sim-canvas";
@@ -69,6 +72,8 @@ function initialSelection(): Selection {
 }
 
 let selection: Selection = initialSelection();
+/** 리플레이 중이면 불러온 원본. null이면 일반 모드(선택한 감독관·시나리오) */
+let replaySource: ReplaySource | null = null;
 
 const canvas = requireElement(CANVAS_ID, HTMLCanvasElement);
 const stage = requireElement(STAGE_ID, HTMLElement);
@@ -90,11 +95,18 @@ interface Session {
   commandLog: CommandLogEntry[];
   /** 지금까지 돌린 step 수 (명령 로그의 step 번호) */
   stepCount: number;
+  /** 리플레이를 멈출 step 수 (원본이 종료 전 결과일 때). null이면 종료 조건에서 멈춘다 */
+  stopStep: number | null;
 }
 
-/** 현재 선택(감독관·시나리오)으로 월드와 감독관을 새로 만든다. 쌓인 수동 명령·토스트·명령 로그는 버려진다. */
+/**
+ * 현재 선택(감독관·시나리오)으로 월드와 감독관을 새로 만든다. 쌓인 수동 명령·토스트·명령 로그는 버려진다.
+ * 리플레이 중이면 원본의 시나리오 명세·시드로 만들고, 감독관 대신 명령 로그를 처음부터 재생한다.
+ */
 function createSession(): Session {
-  const config = resolveSessionConfig(selection, POLICIES, SCENARIOS);
+  const config = replaySource
+    ? replaySessionConfig(replaySource)
+    : resolveSessionConfig(selection, POLICIES, SCENARIOS);
   const world = createWorld(config.scenario);
   const manual = config.manual ? createManualSupervisor() : null;
   const supervisor: Supervisor = manual ?? createPolicySupervisor(config);
@@ -112,6 +124,7 @@ function createSession(): Session {
     },
     commandLog: [],
     stepCount: 0,
+    stopStep: replaySource ? replayStopStep(replaySource.result) : null,
   };
 }
 
@@ -156,11 +169,23 @@ function collectWarnings(events: readonly SimEvent[], now: number): void {
   }
 }
 
+/** 더 돌릴 수 없는가: 종료 조건 도달, 또는 리플레이가 원본과 같은 step 수까지 감 */
+function sessionFinished(s: Session): boolean {
+  return isEnded(s.world) || (s.stopStep !== null && s.stepCount >= s.stopStep);
+}
+
+/** 실행이 끝났을 때 한 번: 자동 일시정지, 지표 갱신, 리플레이면 원본 지표와 비교 */
+function finishSession(now: number): void {
+  loop = markEnded(loop);
+  metricsPanel.update(getMetrics, now, true);
+  if (replaySource) replayLoader.setComparison(compareReplay(getMetrics(), replaySource));
+}
+
 /** step을 count번 돌린다. 종료 조건에 도달하면 멈추고 자동 일시정지한다. */
 function runSteps(count: number, now: number): void {
   const s = session;
   const { world, supervisor } = s;
-  for (let i = 0; i < count && !isEnded(world); i++) {
+  for (let i = 0; i < count && !sessionFinished(s); i++) {
     const commands = supervisor.decide(world);
     // 수동·정책 공통으로 이번 step에 넘긴 명령을 기록한다 (빈 명령 처리는 recordCommands가 정한다).
     recordCommands(s.commandLog, s.stepCount, world.simTime, commands);
@@ -169,10 +194,7 @@ function runSteps(count: number, now: number): void {
     // world.events에는 마지막 step의 이벤트만 남으므로 step마다 모은다.
     collectWarnings(world.events, now);
   }
-  if (isEnded(world) && !loop.ended) {
-    loop = markEnded(loop);
-    metricsPanel.update(getMetrics, now, true);
-  }
+  if (sessionFinished(s) && !loop.ended) finishSession(now);
 }
 
 /** 현재 상태와 덧그림(드래그, 토스트)을 그린다. */
@@ -200,7 +222,23 @@ function restart(): void {
   dragInput = attachInput(session);
   loop = resetLoopState(loop);
   layout = resize();
+  replayLoader.setReplay(replaySource);
+  // 리플레이 중에는 select에 "리플레이" 표시 옵션을 보이고, 끝나면 선택을 복원한다.
+  selectors.set(selection);
+  selectors.showReplay(replaySource ? replaySelectLabels(replaySource.result.policy, replaySource.result.scenario) : null);
   refresh(performance.now());
+}
+
+/** 리플레이를 시작한다 (불러온 원본의 처음부터). URL 쿼리는 건드리지 않는다. */
+function startReplay(source: ReplaySource): void {
+  replaySource = source;
+  restart();
+}
+
+/** 리플레이를 끝내고 선택한 감독관·시나리오로 돌아간다. */
+function exitReplay(): void {
+  replaySource = null;
+  restart();
 }
 
 /** 선택을 URL 쿼리에 반영한다 (새로고침해도 같은 설정). */
@@ -230,8 +268,10 @@ const controls = createControls(requireElement(CONTROLS_ID, HTMLElement), {
 });
 
 const sessionControls = requireElement(SESSION_CONTROLS_ID, HTMLElement);
-createSelectors(sessionControls, choices, selection, {
+const selectors = createSelectors(sessionControls, choices, selection, {
   onChange(next) {
+    // 리플레이 중에 선택을 바꾸면 일반 모드로 돌아간다.
+    replaySource = null;
     selection = next;
     syncQuery();
     restart();
@@ -239,8 +279,22 @@ createSelectors(sessionControls, choices, selection, {
 });
 createExportButton(sessionControls, {
   world: () => session.world,
-  meta: () => ({ scenario: session.config.scenarioName, policy: session.config.policyName, seed: session.config.seed }),
+  meta: () => ({
+    scenario: session.config.scenarioName,
+    policy: session.config.policyName,
+    seed: session.config.seed,
+    scenarioSpec: session.config.scenario,
+  }),
   commandLog: () => session.commandLog,
+});
+const replayLoader = createReplayLoader(sessionControls, {
+  onLoad: startReplay,
+  onError(message) {
+    // 현재 세션은 그대로 두고 오류만 알린다.
+    replayLoader.showError(message);
+    session.toasts.push(message, performance.now());
+  },
+  onExit: exitReplay,
 });
 syncQuery();
 
@@ -259,7 +313,7 @@ function frame(now: number): void {
   loop = plan.state;
   runSteps(plan.steps, now);
   // 시작부터 종료 조건이 참인 시나리오도 재생 버튼을 막는다.
-  if (!loop.ended && isEnded(session.world)) loop = markEnded(loop);
+  if (!loop.ended && sessionFinished(session)) finishSession(now);
 
   draw(now);
   controls.update(loop);

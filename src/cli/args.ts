@@ -1,5 +1,5 @@
 // CLI 인자 파서 (순수 함수). node API를 쓰지 않는다.
-// 지원 인자: --scenario, --policy, --seed, --compare, --out, --help (`--키 값` 또는 `--키=값`)
+// 지원 인자: --scenario, --policy, --seed, --compare, --replay, --out, --help (`--키 값` 또는 `--키=값`)
 
 /** 파싱된 CLI 옵션 */
 export interface CliOptions {
@@ -11,6 +11,8 @@ export interface CliOptions {
   seed?: number;
   /** 비교할 정책 목록 (M6) */
   compare?: string[];
+  /** 재생할 결과 JSON 파일 경로 (M6 리플레이) */
+  replay?: string;
   /** 결과 JSON을 저장할 디렉터리 */
   out?: string;
   /** 도움말 출력 */
@@ -22,7 +24,7 @@ export interface ArgsError {
 }
 
 /** 값을 받는 옵션 이름 */
-const VALUE_OPTIONS = ["scenario", "policy", "seed", "compare", "out"] as const;
+const VALUE_OPTIONS = ["scenario", "policy", "seed", "compare", "replay", "out"] as const;
 type ValueOption = (typeof VALUE_OPTIONS)[number];
 
 const INTEGER_PATTERN = /^-?\d+$/;
@@ -30,12 +32,16 @@ const INTEGER_PATTERN = /^-?\d+$/;
 /** 도움말 문자열 */
 export const USAGE = [
   "사용법: tsx src/cli/run.ts --scenario <이름|파일.json> --policy <정책> [--seed <정수>] [--out <디렉터리>]",
+  "       tsx src/cli/run.ts --scenario <이름|파일.json> --compare <a,b,...> [--seed <정수>] [--out <디렉터리>]",
+  "       tsx src/cli/run.ts --replay <결과.json>",
   "",
   "  --scenario <이름|경로>  시나리오 이름 또는 .json 파일 경로",
   "  --policy <이름>         감독관 정책 이름",
   "  --seed <정수>           시드 (생략하면 시나리오의 seed)",
-  "  --compare <a,b,...>     여러 정책 비교 (M6에서 지원 예정)",
-  "  --out <디렉터리>        결과 JSON 저장 위치 (<시나리오>-<정책>-<시드>.json)",
+  "  --compare <a,b,...>     여러 정책을 같은 시나리오·시드로 실행해 지표 비교 (--policy 대신)",
+  "  --replay <결과.json>    결과 JSON의 명령 로그를 재생해 지표가 같은지 확인 (단독으로 쓴다)",
+  "  --out <디렉터리>        결과 JSON 저장 위치 (<시나리오>-<정책>-<시드>.json,",
+  "                          비교 요약은 <시나리오>-compare-<시드>.json)",
   "  --help                  이 도움말",
 ].join("\n");
 
@@ -109,6 +115,9 @@ export function parseArgs(argv: readonly string[]): CliOptions | ArgsError {
         options.compare = list;
         break;
       }
+      case "replay":
+        options.replay = value;
+        break;
       case "out":
         options.out = value;
         break;

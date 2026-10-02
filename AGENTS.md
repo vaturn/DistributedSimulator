@@ -31,6 +31,7 @@
 | **작업 완료 전 검증** | `make check` |
 | 화면 없이 실행 | `make sim SCENARIO=basic POLICY=greedy SEED=42` |
 | 정책 비교 | `make compare SCENARIO=basic POLICIES=random,greedy SEED=42` |
+| 리플레이 | `make replay FILE=out/basic-greedy-42.json` |
 | 정리 | `make clean` / `make distclean` |
 | git 상태 확인 | `make git-status` |
 | 커밋 / 푸시 | `make commit MSG="..."` / `make push` / `make ship MSG="..."` |
@@ -48,7 +49,7 @@ Makefile은 아래 npm scripts를 호출한다. `package.json`(M0에서 생성)�
 | `test` | `vitest run` |
 | `test:watch` | `vitest` |
 | `typecheck` | `tsc --noEmit` |
-| `sim` | `tsx src/cli/run.ts` (화면 없이 실행. 인자: `--scenario`, `--policy`, `--seed`, `--compare`, `--out`) |
+| `sim` | `tsx src/cli/run.ts` (화면 없이 실행. 인자: `--scenario`, `--policy`, `--seed`, `--compare`, `--replay`, `--out`) |
 
 `sim`과 `compare`는 CLI(`src/cli/run.ts`)가 생기는 M5~M6 전까지 동작하지 않는 것이 정상이다.
 

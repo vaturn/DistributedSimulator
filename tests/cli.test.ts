@@ -1,7 +1,7 @@
 // CLI 테스트. 인자 파서, 표 형식, 핵심 실행 로직(runCli)을 파일 시스템 없이 검증한다.
 import { describe, expect, it } from "vitest";
 import { type CliOptions, isArgsError, parseArgs } from "../src/cli/args";
-import { displayWidth, formatMetricsTable } from "../src/cli/format";
+import { displayWidth, formatCompareTable, formatMetricsTable } from "../src/cli/format";
 import {
   type CliIo,
   EXIT_ERROR,
@@ -11,6 +11,7 @@ import {
   resultFilePath,
   runCli,
 } from "../src/cli/runCli";
+import { type RunResult, parseRunResult } from "../src/engine/report";
 import type { Metrics } from "../src/engine/types";
 import { findScenario } from "../src/scenarios";
 import { POLICIES } from "../src/supervisor/registry";
@@ -62,6 +63,10 @@ describe("parseArgs", () => {
       seed: 42,
       out: "out",
     });
+  });
+
+  it("--replay 경로를 읽는다", () => {
+    expect(parsed(["--replay", "out/a.json"])).toEqual({ help: false, replay: "out/a.json" });
   });
 
   it("--키=값 형식과 음수 seed, compare 목록을 읽는다", () => {
@@ -242,16 +247,180 @@ describe("runCli", () => {
     expect(runCli(opts({ scenario: "basic" }), memoryIo().io)).toBe(EXIT_ERROR);
   });
 
-  it("--compare는 M6 예정: 종료 코드 2", () => {
-    const m = memoryIo();
-    const code = runCli(opts({ scenario: "basic", compare: ["random", "greedy"] }), m.io);
-    expect(code).toBe(EXIT_UNSUPPORTED);
-    expect(m.stderr()).toContain("M6에서 지원 예정");
-  });
-
   it("--help는 사용법을 출력한다", () => {
     const m = memoryIo();
     expect(runCli(opts({ help: true }), m.io)).toBe(EXIT_OK);
     expect(m.stdout()).toContain("사용법");
+  });
+});
+
+describe("formatCompareTable", () => {
+  const base: Metrics = {
+    simTime: 300,
+    completedCount: 42,
+    spawnedCount: 50,
+    throughput: 0.14,
+    avgLeadTime: 12.34,
+    avgWaitTime: 5.5,
+    poolWaitTime: 100,
+    queueWaitTime: 20,
+    wastedProcessCount: 3,
+    uselessProcessCount: 2,
+    cancelledProcessCount: 1,
+    modules: [
+      { id: "MX", utilization: 0.8, busyTime: 240, doneOccupiedTime: 1.5, queueLength: 2 },
+      { id: "MY", utilization: 0.25, busyTime: 75, doneOccupiedTime: 0, queueLength: 0 },
+    ],
+  };
+  const other: Metrics = {
+    ...base,
+    completedCount: 30,
+    avgLeadTime: null,
+    modules: [
+      { id: "MX", utilization: 0.5, busyTime: 150, doneOccupiedTime: 0, queueLength: 0 },
+      { id: "MY", utilization: 0.1, busyTime: 30, doneOccupiedTime: 4, queueLength: 0 },
+    ],
+  };
+
+  it("행은 지표, 열은 정책이고 모듈별 가동률·점유 낭비를 포함한다", () => {
+    const text = formatCompareTable(
+      [
+        { policy: "p1", metrics: base },
+        { policy: "p2", metrics: other },
+      ],
+      { scenario: "sc", seed: 7 },
+    );
+    expect(text).toContain("시나리오: sc  시드: 7  정책: p1, p2");
+    expect(text).toMatch(/지표\s+p1\s+p2/);
+    expect(text).toMatch(/완료\s+42\s+30/);
+    expect(text).toMatch(/평균 소요\s+12\.3s\s+-/);
+    expect(text).toMatch(/가동률 MX\s+80%\s+50%/);
+    expect(text).toMatch(/가동률 MY\s+25%\s+10%/);
+    expect(text).toMatch(/점유 낭비 MY\s+0\.0s\s+4\.0s/);
+  });
+
+  it("열이 한글 폭을 고려해 맞춰진다", () => {
+    const lines = formatCompareTable([
+      { policy: "p1", metrics: base },
+      { policy: "p2", metrics: other },
+    ]).split("\n");
+    const widths = new Set(lines.map((l) => displayWidth(l)));
+    expect(widths.size).toBe(1);
+  });
+});
+
+describe("runCli --compare", () => {
+  const names = POLICIES.map((p) => p.name);
+
+  it("모든 정책이 표에 나오고, 각 열은 같은 seed의 단독 실행과 같다", () => {
+    const m = memoryIo();
+    expect(runCli(opts({ scenario: "basic", compare: names, seed: 42 }), m.io)).toBe(EXIT_OK);
+    expect(m.stderr()).toBe("");
+    const out = m.stdout();
+    expect(out).toContain(`정책: ${names.join(", ")}`);
+    expect(out).toMatch(new RegExp(`지표\\s+${names.join("\\s+")}`));
+    const completedRow = /^완료\s+(.*)$/m.exec(out)?.[1]?.trim().split(/\s+/) ?? [];
+    expect(completedRow).toHaveLength(names.length);
+    names.forEach((name, i) => {
+      const single = memoryIo();
+      runCli(opts({ scenario: "basic", policy: name, seed: 42 }), single.io);
+      const completed = /완료\s+(\d+)/.exec(single.stdout())?.[1];
+      expect(completedRow[i]).toBe(completed);
+    });
+    expect(m.store.size).toBe(0);
+  });
+
+  it("--out이 있으면 정책별 결과 JSON과 비교 요약을 저장하고, 결과는 단독 sim과 같다", () => {
+    const m = memoryIo();
+    expect(runCli(opts({ scenario: "basic", compare: names, seed: 42, out: "res" }), m.io)).toBe(EXIT_OK);
+    for (const name of names) {
+      const path = `res/basic-${name}-42.json`;
+      expect(m.stdout()).toContain(path);
+      const single = memoryIo();
+      runCli(opts({ scenario: "basic", policy: name, seed: 42, out: "res" }), single.io);
+      expect(m.store.get(path)).toBe(single.store.get(path));
+      expect(() => parseRunResult(JSON.parse(m.store.get(path) ?? "") as unknown)).not.toThrow();
+    }
+    const summary = JSON.parse(m.store.get("res/basic-compare-42.json") ?? "{}") as {
+      scenario: string;
+      seed: number;
+      policies: { policy: string; metrics: Metrics }[];
+    };
+    expect(summary.scenario).toBe("basic");
+    expect(summary.seed).toBe(42);
+    expect(summary.policies.map((p) => p.policy)).toEqual(names);
+    const greedy = parseRunResult(JSON.parse(m.store.get("res/basic-greedy-42.json") ?? "") as unknown);
+    expect(summary.policies.find((p) => p.policy === "greedy")?.metrics).toEqual(greedy.metrics);
+    expect(m.store.size).toBe(names.length + 1);
+  });
+
+  it("없는 정책이 섞이면 실행 전 오류, 종료 코드 1", () => {
+    const m = memoryIo();
+    const code = runCli(opts({ scenario: "basic", compare: ["greedy", "nope", "zzz"], out: "res" }), m.io);
+    expect(code).toBe(EXIT_ERROR);
+    expect(m.stderr()).toContain("정책을 찾을 수 없습니다: nope, zzz");
+    expect(m.stdout()).toBe("");
+    expect(m.store.size).toBe(0);
+  });
+
+  it("같은 정책이 두 번이면 오류", () => {
+    const m = memoryIo();
+    expect(runCli(opts({ scenario: "basic", compare: ["greedy", "greedy"] }), m.io)).toBe(EXIT_ERROR);
+    expect(m.stderr()).toContain("두 번");
+  });
+
+  it("--policy와 함께 쓰거나 --scenario가 없으면 오류", () => {
+    expect(runCli(opts({ scenario: "basic", policy: "greedy", compare: names }), memoryIo().io)).toBe(EXIT_UNSUPPORTED);
+    expect(runCli(opts({ compare: names }), memoryIo().io)).toBe(EXIT_ERROR);
+  });
+});
+
+describe("runCli --replay", () => {
+  /** basic + greedy 결과를 저장한 메모리 IO */
+  function saved() {
+    const m = memoryIo();
+    runCli(opts({ scenario: "basic", policy: "greedy", seed: 42, out: "res" }), m.io);
+    const path = "res/basic-greedy-42.json";
+    const text = m.store.get(path) ?? "";
+    return { path, text, result: JSON.parse(text) as RunResult };
+  }
+
+  it("저장한 결과를 재생하면 일치, 지표 표를 출력한다", () => {
+    const { path, text } = saved();
+    const m = memoryIo({ [path]: text });
+    expect(runCli(opts({ replay: path }), m.io)).toBe(EXIT_OK);
+    expect(m.stderr()).toBe("");
+    expect(m.stdout()).toContain(`리플레이: ${path}`);
+    expect(m.stdout()).toContain("정책: greedy");
+    expect(m.stdout()).toContain("일치");
+    expect(m.stdout()).toMatch(/완료\s+\d+/);
+  });
+
+  it("명령 로그를 변조하면 불일치 목록과 종료 코드 1", () => {
+    const { path, result } = saved();
+    const tampered = { ...result, commandLog: result.commandLog.slice(1) };
+    const m = memoryIo({ [path]: JSON.stringify(tampered) });
+    expect(runCli(opts({ replay: path }), m.io)).toBe(EXIT_ERROR);
+    expect(m.stderr()).toContain("불일치");
+    expect(m.stderr()).toMatch(/metrics\.\w+: .+ ≠ .+/);
+  });
+
+  it("다른 인자와 함께 쓰면 인자 오류", () => {
+    const { path, text } = saved();
+    for (const extra of [{ scenario: "basic" }, { policy: "greedy" }, { seed: 1 }, { compare: ["greedy"] }]) {
+      const m = memoryIo({ [path]: text });
+      expect(runCli(opts({ replay: path, ...extra }), m.io)).toBe(EXIT_UNSUPPORTED);
+      expect(m.stderr()).toContain("함께 쓸 수 없습니다");
+    }
+  });
+
+  it("없는 파일, 잘못된 JSON, 잘못된 형식은 오류", () => {
+    const m = memoryIo({ "bad.json": "{", "v1.json": JSON.stringify({ ...saved().result, version: 1 }) });
+    expect(runCli(opts({ replay: "missing.json" }), m.io)).toBe(EXIT_ERROR);
+    expect(runCli(opts({ replay: "bad.json" }), m.io)).toBe(EXIT_ERROR);
+    expect(runCli(opts({ replay: "v1.json" }), m.io)).toBe(EXIT_ERROR);
+    expect(m.stderr()).toContain("읽지 못했습니다");
+    expect(m.stderr()).toContain("올바르지 않습니다");
+    expect(m.stderr()).toContain("version");
   });
 });

@@ -3,7 +3,7 @@
 
 import { buildRunResult, serializeRunResult } from "../engine/report";
 import type { CommandLogEntry } from "../engine/runner";
-import type { WorldState } from "../engine/types";
+import type { Scenario, WorldState } from "../engine/types";
 
 /** 파일명에 쓰는 simTime 소수 자릿수 */
 export const FILE_TIME_DECIMALS = 1;
@@ -21,6 +21,8 @@ export interface ExportMeta {
   scenario: string;
   policy: string;
   seed: number;
+  /** 실행에 쓴 시나리오 전체 (리플레이용, seed는 결과에서 meta.seed로 덮어쓴다) */
+  scenarioSpec: Scenario;
 }
 
 function safePart(s: string): string {
@@ -28,7 +30,7 @@ function safePart(s: string): string {
 }
 
 /** 내보내기 파일명: `<scenario>-<policy>-<seed>-t<simTime>.json` */
-export function exportFileName(meta: ExportMeta, simTime: number): string {
+export function exportFileName(meta: Pick<ExportMeta, "scenario" | "policy" | "seed">, simTime: number): string {
   const t = simTime.toFixed(FILE_TIME_DECIMALS);
   return `${safePart(meta.scenario)}-${safePart(meta.policy)}-${meta.seed}-t${t}.json`;
 }

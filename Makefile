@@ -11,6 +11,7 @@ POLICY   ?= greedy
 SEED     ?=
 POLICIES ?= random,greedy
 OUT      ?= out
+FILE     ?=
 ARGS     ?=
 
 # git 작업 (규칙: docs/GIT.md)
@@ -30,7 +31,7 @@ SEED_ARG := $(if $(SEED),--seed $(SEED),)
 # make sim은 OUT을 명령줄(또는 환경변수)로 줬을 때만 결과 JSON을 저장한다.
 SIM_OUT_ARG := $(if $(filter command line environment,$(origin OUT)),--out $(OUT),)
 
-.PHONY: help setup dev build preview test test-watch typecheck check sim compare clean distclean git-status commit push ship sync
+.PHONY: help setup dev build preview test test-watch typecheck check sim compare replay clean distclean git-status commit push ship sync
 
 help: ## 사용 가능한 타깃 목록
 	@echo "사용법: make <타깃> [변수=값]"
@@ -38,7 +39,7 @@ help: ## 사용 가능한 타깃 목록
 	@grep -E '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | \
 		awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-12s\033[0m %s\n", $$1, $$2}'
 	@echo
-	@echo "변수: SCENARIO=$(SCENARIO) POLICY=$(POLICY) SEED=$(SEED) POLICIES=$(POLICIES) OUT=$(OUT) ARGS=$(ARGS)"
+	@echo "변수: SCENARIO=$(SCENARIO) POLICY=$(POLICY) SEED=$(SEED) POLICIES=$(POLICIES) OUT=$(OUT) FILE=$(FILE) ARGS=$(ARGS)"
 
 package.json:
 	@echo "package.json이 없습니다. 먼저 M0(프로젝트 셋업)을 진행하세요. (plan/planing.md §10)" >&2
@@ -78,6 +79,10 @@ sim: node_modules ## 화면 없이 시뮬레이션 실행 (SCENARIO, POLICY, SEE
 compare: node_modules ## 여러 정책을 같은 조건으로 비교 (SCENARIO, POLICIES, SEED, OUT)
 	@mkdir -p $(OUT)
 	$(NPM) run sim -- --scenario $(SCENARIO) --compare $(POLICIES) $(SEED_ARG) --out $(OUT)
+
+replay: node_modules ## 결과 JSON의 명령 로그를 재생해 지표 일치 확인 (FILE 필수)
+	@if [ -z "$(FILE)" ]; then echo "오류: FILE이 필요합니다. 예: make replay FILE=out/basic-greedy-42.json" >&2; exit 1; fi
+	$(NPM) run sim -- --replay $(FILE)
 
 clean: ## 빌드 산출물과 실행 결과 삭제
 	rm -rf dist $(OUT)

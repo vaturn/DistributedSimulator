@@ -135,3 +135,28 @@ export function resolveSessionConfig(
   if (!policy) throw new Error(`알 수 없는 감독관: ${selection.supervisor}`);
   return { ...base, policyName: policy.name, manual: false, createPolicy: (seed) => policy.create(seed) };
 }
+
+/** 리플레이 중 select에 끼워 넣는 표시 옵션의 값 (실제 감독관·시나리오 이름과 겹치지 않게 빈 문자열) */
+export const REPLAY_OPTION_VALUE = "";
+
+/** 리플레이 중 select에 보여 줄 표시 라벨 */
+export interface ReplaySelectLabels {
+  supervisor: string;
+  scenario: string;
+}
+
+/** 리플레이 원본의 정책·시나리오 이름 → select 표시 라벨 */
+export function replaySelectLabels(policy: string, scenario: string): ReplaySelectLabels {
+  return { supervisor: `리플레이: ${policy}`, scenario: `리플레이: ${scenario}` };
+}
+
+/**
+ * select 값 → 선택. 리플레이 표시 옵션(REPLAY_OPTION_VALUE)이 남아 있는 쪽은 마지막 선택을 쓴다.
+ * 리플레이 중 한쪽 select만 바꿔도 다른 쪽은 리플레이 전 선택으로 돌아간다.
+ */
+export function selectionFromSelectValues(values: Selection, last: Selection): Selection {
+  return {
+    supervisor: values.supervisor === REPLAY_OPTION_VALUE ? last.supervisor : values.supervisor,
+    scenario: values.scenario === REPLAY_OPTION_VALUE ? last.scenario : values.scenario,
+  };
+}

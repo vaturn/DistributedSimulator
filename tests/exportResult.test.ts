@@ -8,7 +8,7 @@ import { createGreedySupervisor } from "../src/supervisor/policies/greedy";
 import { exportFileName, runResultJson } from "../src/ui/exportResult";
 
 const scenario = basic as Scenario;
-const META = { scenario: "basic", policy: "greedy", seed: 42 };
+const META = { scenario: "basic", policy: "greedy", seed: 42, scenarioSpec: scenario };
 
 describe("exportFileName", () => {
   it("<scenario>-<policy>-<seed>-t<simTime>.json 형식", () => {
@@ -31,7 +31,7 @@ describe("runResultJson", () => {
     const { world, commandLog } = runHeadless(scenario, createGreedySupervisor());
     const json = runResultJson(world, META, commandLog);
     const parsed: unknown = JSON.parse(json);
-    expect(parsed).toMatchObject({ ...META, ended: true, simTime: world.simTime });
+    expect(parsed).toMatchObject({ scenario: META.scenario, policy: META.policy, seed: META.seed, ended: true, simTime: world.simTime });
     expect(JSON.parse(JSON.stringify(parsed))).toEqual(parsed);
     expect((parsed as { commandLog: unknown[] }).commandLog).toEqual(JSON.parse(JSON.stringify(commandLog)));
   });
