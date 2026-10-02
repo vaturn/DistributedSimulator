@@ -166,6 +166,33 @@ interface WorldState {
   events: SimEvent[];              // 이번 step에서 발생한 이벤트 (렌더러와 로그가 사용)
   config: SimConfig;
 }
+
+// 설정. 기본값은 §9를 따르며 코드에서는 engine/types.ts의 DEFAULT_CONFIG 한 곳에만 둔다.
+interface SimConfig {
+  dt: number;                      // 기본 0.1
+  moveTime: number;                // 기본 0
+  occupyWhenDone: boolean;         // 기본 true
+  cancelOnMove: boolean;           // 기본 true (false = 처리 중 이동 금지)
+  queueLimit: number | null;       // 기본 null (무제한)
+  endCondition:                    // 기본 { kind: "time", value: 300 }
+    | { kind: "time"; value: number }
+    | { kind: "completed"; value: number }
+    | { kind: "allDone" };
+}
+
+// 시나리오 파일 형식 (§5.1). arrival을 생략하면 도착 없음, capacity를 생략하면 1.
+interface Scenario {
+  name: string;
+  seed: number;
+  modules: { id: ModuleId; resultType: ResultType; processTime: number; capacity?: number }[];
+  jobs: {
+    initial: { required: ResultType[] }[];
+    arrival?:
+      | { kind: "poisson"; rate: number; requiredPool: ResultType[]; minReq: number; maxReq: number }
+      | { kind: "none" };
+  };
+  config?: Partial<SimConfig>;
+}
 ```
 
 ### 5.1 시나리오 파일 (`scenarios/*.json`)

@@ -1,0 +1,22 @@
+{
+  "name": "basic",
+  "seed": 42,
+  "modules": [
+    { "id": "M1", "resultType": "A", "processTime": 2, "capacity": 1 },
+    { "id": "M2", "resultType": "B", "processTime": 5, "capacity": 1 },
+    { "id": "M3", "resultType": "C", "processTime": 3, "capacity": 2 }
+  ],
+  "jobs": {
+    "initial": [
+      { "required": ["A", "B"] },
+      { "required": ["B", "C"] }
+    ],
+    "arrival": { "kind": "poisson", "rate": 0.3, "requiredPool": ["A", "B", "C"], "minReq": 1, "maxReq": 3 }
+  },
+  "config": {
+    "moveTime": 0,
+    "occupyWhenDone": true,
+    "cancelOnMove": true,
+    "endCondition": { "kind": "time", "value": 300 }
+  }
+}
