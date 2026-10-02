@@ -208,4 +208,76 @@ export interface WorldState {
   nextJobNumber: number;
   /** 이동 중인 작업 정보 (삽입 순서 = 이동 시작 순서) */
   moves: Map<JobId, MoveInfo>;
+  /** 지표 누적값. 갱신은 metrics.ts만 한다(world.ts는 호출만). */
+  metricsState: MetricsState;
+}
+
+/**
+ * 지표 계산에 필요한 누적값 (기획서 §8). computeMetrics가 이 값과 현재 상태로 Metrics를 만든다.
+ * - 시간 누적(대기, 점유 낭비)은 step 7단계(updateMetrics)에서 더한다.
+ * - 사건 누적(생성, 완료, 처리 시작/끝/취소)은 사건이 생길 때 metrics.ts의 기록 함수로 더한다.
+ */
+export interface MetricsState {
+  /** 지금까지 생성된 작업 수 (초기 작업 + 도착 작업) */
+  spawnedCount: number;
+  /** 지표에 반영한 완료 작업 수 */
+  completedTracked: number;
+  /** 완료 작업의 (completedAt - createdAt) 합 */
+  leadTimeSum: number;
+  /** 완료 작업의 대기 시간(대기 구역 + 대기열) 합 */
+  completedWaitSum: number;
+  /** 모든 작업의 대기 구역 체류 시간 합 (진행 중 작업 포함) */
+  poolWaitTime: number;
+  /** 모든 작업의 모듈 대기열 체류 시간 합 (진행 중 작업 포함) */
+  queueWaitTime: number;
+  /** 아직 완료되지 않은 작업별 대기 시간 합 */
+  jobWait: Map<JobId, number>;
+  /** 끝까지 처리했지만 필요한 결과를 새로 얻지 못한 처리 횟수 */
+  uselessProcessCount: number;
+  /** 처리 도중 취소된 처리 횟수 */
+  cancelledProcessCount: number;
+  /** 처리 중인 작업별: 처리를 시작할 때 이 처리가 필요한 결과를 주는가 */
+  pendingUseful: Map<JobId, boolean>;
+  /** 모듈별 DONE_AT_MODULE 점유 누적 시간 (슬롯 단위) */
+  doneOccupiedTime: Map<ModuleId, number>;
+}
+
+/** 모듈별 지표 */
+export interface ModuleMetrics {
+  id: ModuleId;
+  /** busyTime / (simTime × capacity). simTime 0이면 0. 범위 0~1 */
+  utilization: number;
+  /** 슬롯 단위 누적 가동 시간 */
+  busyTime: number;
+  /** DONE_AT_MODULE 상태로 슬롯을 점유한 누적 시간 (점유 낭비, 슬롯 단위) */
+  doneOccupiedTime: number;
+  /** 현재 대기열 길이 */
+  queueLength: number;
+}
+
+/** 지표 (기획서 §8). computeMetrics(world)가 만든다. */
+export interface Metrics {
+  simTime: number;
+  /** 완료 수 */
+  completedCount: number;
+  /** 생성된 작업 수 (초기 작업 + 도착 작업) */
+  spawnedCount: number;
+  /** 처리량 = 완료 수 / simTime. simTime 0이면 0 */
+  throughput: number;
+  /** 평균 소요 시간 = 완료 작업의 평균(completedAt - createdAt). 완료 작업이 없으면 null */
+  avgLeadTime: number | null;
+  /** 평균 대기 시간 = 완료 작업의 평균(대기 구역 체류 + 대기열 체류). 완료 작업이 없으면 null */
+  avgWaitTime: number | null;
+  /** 모든 작업(진행 중 포함)의 대기 구역 체류 시간 합 */
+  poolWaitTime: number;
+  /** 모든 작업(진행 중 포함)의 모듈 대기열 체류 시간 합 */
+  queueWaitTime: number;
+  /** 헛된 처리 횟수 = uselessProcessCount + cancelledProcessCount */
+  wastedProcessCount: number;
+  /** 끝까지 처리했지만 필요 없거나 이미 가진 결과만 준 처리 횟수 */
+  uselessProcessCount: number;
+  /** 처리 도중 취소된 처리 횟수 */
+  cancelledProcessCount: number;
+  /** 모듈별 지표 (시나리오의 모듈 순서) */
+  modules: ModuleMetrics[];
 }

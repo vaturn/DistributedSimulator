@@ -312,6 +312,37 @@ export function usefulResults(world: Readonly<WorldState>, jobId: JobId, moduleI
   return [...new Set(gained)].filter((r) => remaining.has(r));
 }
 
+// ---------- 지표용 판정 (metrics.ts가 부른다, 기획서 §8) ----------
+
+/** 대기 종류: 대기 구역 체류("pool") 또는 모듈 대기열 체류("queue") */
+export type WaitKind = "pool" | "queue";
+
+/** 작업이 지금 기다리는 중인가. POOL이면 "pool", QUEUED이면 "queue", 그 밖(이동, 처리, 점유, 완료)은 null */
+export function waitKind(job: Readonly<Job>): WaitKind | null {
+  switch (job.state) {
+    case "POOL":
+      return "pool";
+    case "QUEUED":
+      return "queue";
+    default:
+      return null;
+  }
+}
+
+/** 처리가 끝난 작업이 모듈 슬롯을 점유하고 있는가 (점유 낭비, §8) */
+export function isDoneOccupying(job: Readonly<Job>): boolean {
+  return job.state === "DONE_AT_MODULE" && job.location.kind === "module";
+}
+
+/**
+ * 지금 이 작업을 이 모듈에서 처리하면 헛된 처리인가 (§8 "헛된 처리"):
+ * 처리해도 필요한 결과를 새로 얻지 못한다(필요 없는 결과이거나 이미 가진 결과).
+ * 처리를 시작하는 시점에 판정한다. 처리 중에는 acquired가 바뀌지 않으므로 끝났을 때와 같다.
+ */
+export function isWastedProcess(world: Readonly<WorldState>, jobId: JobId, moduleId: ModuleId): boolean {
+  return usefulResults(world, jobId, moduleId).length === 0;
+}
+
 /** 작업이 이 모듈에서 처리를 마칠 때까지 남은 처리 시간 (현재 progress 반영, 0 이상) */
 export function remainingProcessTime(world: Readonly<WorldState>, jobId: JobId, moduleId: ModuleId): number {
   const job = world.jobs.get(jobId);

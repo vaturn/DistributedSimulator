@@ -1,6 +1,7 @@
 // 시뮬레이션 월드: 생성, 명령 적용, 한 step 진행.
 // 이 파일은 상태 전이의 "순서"와 "기록"만 담당하고, 판정·계산은 모두 world.rules에 맡긴다.
 
+import { createMetricsState, recordEvent, recordJobSpawned, updateMetrics } from "./metrics";
 import { nextRandom, seedToState } from "./rng";
 import { mergeRules, stepEndTime } from "./rules";
 import type {
@@ -75,6 +76,7 @@ export function createWorld(scenario: Scenario, options: CreateWorldOptions = {}
     rngState: seedToState(scenario.seed),
     nextJobNumber: FIRST_JOB_NUMBER,
     moves: new Map(),
+    metricsState: createMetricsState(),
   };
 
   for (const spec of scenario.jobs.initial) {
@@ -87,6 +89,7 @@ export function createWorld(scenario: Scenario, options: CreateWorldOptions = {}
 
 function emit(world: WorldState, event: SimEvent): void {
   world.events.push(event);
+  recordEvent(world, event);
 }
 
 function warn(world: WorldState, message: string): void {
@@ -116,6 +119,7 @@ function spawnJob(world: WorldState, spec: JobSpec, emitEvent: boolean): Job {
     createdAt: world.simTime,
   };
   world.jobs.set(id, job);
+  recordJobSpawned(world, job);
   if (emitEvent) emit(world, { type: "jobSpawned", jobId: id, t: world.simTime });
   return job;
 }
@@ -300,13 +304,6 @@ function resolveCompletions(world: WorldState, dt: number): void {
   }
 }
 
-/** 7. 지표 갱신 (모듈 가동 시간) */
-function updateMetrics(world: WorldState, processed: Map<ModuleId, number>, dt: number): void {
-  for (const module of world.modules.values()) {
-    module.busyTime += world.rules.busyTimeDelta(world, module, processed.get(module.id) ?? 0, dt);
-  }
-}
-
 /** 한 step 진행한다. world를 제자리에서 바꾼다. */
 export function step(world: WorldState, commands: Command[], dt: number = world.config.dt): void {
   world.events = [];
@@ -322,7 +319,7 @@ export function step(world: WorldState, commands: Command[], dt: number = world.
   const processed = advanceProcessing(world, dt);
   // 6. 완료 판정
   resolveCompletions(world, dt);
-  // 7. 지표 갱신
+  // 7. 지표 갱신 (가동 시간, 점유 낭비, 대기 시간: metrics.ts)
   updateMetrics(world, processed, dt);
   // 8. 시간 진행 (완료 시각과 같은 계산을 쓴다)
   world.simTime = stepEndTime(world, dt);

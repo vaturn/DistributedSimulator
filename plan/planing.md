@@ -278,9 +278,13 @@ interface Scenario {
 | 처리량 | 완료 수 / simTime |
 | 평균 소요 시간 | 평균(`completedAt - createdAt`) |
 | 모듈 가동률 | 모듈별 `busyTime / (simTime × capacity)`. `busyTime`은 슬롯 단위 가동 시간(처리 중 슬롯 수 × dt의 누적)이라, 용량 2 모듈에서 두 작업이 처리 중이면 step마다 2·dt가 쌓인다. `DONE_AT_MODULE` 점유 시간은 넣지 않는다(점유 낭비로 따로 센다). 범위 0~1 |
-| 점유 낭비 | 모듈별 `DONE_AT_MODULE` 상태로 점유된 시간 (감독관이 늦게 옮긴 정도) |
-| 대기 시간 | 대기 구역 체류 시간과 모듈 대기열 체류 시간 |
-| 헛된 처리 | 필요 없거나 이미 가진 결과를 위해 처리한 횟수 |
+| 점유 낭비 | 모듈별 `DONE_AT_MODULE` 상태로 점유된 시간 (감독관이 늦게 옮긴 정도). 슬롯 단위로 누적하고, 처리가 끝난 그 step 구간은 처리 중이었으므로 넣지 않는다 (처리 끝 시각부터 옮겨진 시각까지). `occupyWhenDone=false`이면 0 |
+| 대기 시간 | 대기 구역(`POOL`) 체류 시간과 모듈 대기열(`QUEUED`) 체류 시간. 이동(`MOVING`)과 점유(`DONE_AT_MODULE`)는 대기가 아니다. 합계(`poolWaitTime`, `queueWaitTime`)는 진행 중 작업을 포함한 전체 작업 합이고, 평균 대기 시간(`avgWaitTime`)은 평균 소요 시간처럼 **완료 작업**의 평균(대기 구역 + 대기열)이다 |
+| 헛된 처리 | 필요 없거나 이미 가진 결과를 위해 처리한 횟수(`uselessProcessCount`, 처리를 **시작할 때** 판정하고 끝까지 처리했을 때 센다) + 처리 도중 취소된 횟수(`cancelledProcessCount`). `wastedProcessCount`는 둘의 합 |
+
+- 구현: 타입은 `engine/types.ts`의 `Metrics`, `MetricsState`(world 안의 누적값), 계산은 `engine/metrics.ts`의 `computeMetrics(world)`(순수 함수). "대기", "점유", "헛된 처리" 판정은 `rules.ts`의 `waitKind`, `isDoneOccupying`, `isWastedProcess`에만 둔다.
+- 시간 누적(가동, 점유 낭비, 대기)은 step 7단계(`metrics.updateMetrics`)에서 step 1~6이 끝난 상태를 이번 구간의 상태로 보고 dt씩 더한다. 사건 누적(생성 수, 완료 작업의 소요·대기 합, 처리 시작/끝/취소)은 이벤트가 생길 때(`metrics.recordEvent`, `recordJobSpawned`) 더한다. step 밖에서 `apply`한 명령의 사건도 놓치지 않기 위해서다.
+- 비율 지표(처리량, 가동률)는 `simTime = 0`이면 0, 평균 지표는 완료 작업이 없으면 `null`이다.
 
 - 실행이 끝나면(종료 조건 도달) 결과를 JSON으로 내보낼 수 있게 한다. 정책 비교용이다.
 

@@ -5,13 +5,98 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>작업-모듈 배치 시뮬레이터</title>
     <style>
-      html, body { margin: 0; padding: 0; background: #111; }
+      /* 색·크기 상수 (캔버스 색은 src/render/theme.ts) */
+      :root {
+        --bg: #111116;
+        --panel-bg: #1a1a20;
+        --panel-border: #2e2e38;
+        --text: #e8e8ee;
+        --text-dim: #9a9aa8;
+        --btn-bg: #2a2a33;
+        --btn-bg-hover: #36363f;
+        --btn-border: #44444f;
+        --btn-primary: #06d6a0;
+        --btn-primary-text: #0b0b10;
+        --ended: #ff6b6b;
+        --sidebar-width: 300px;
+        --gap: 12px;
+        --radius: 6px;
+        --font-size: 14px;
+        --font-size-small: 12px;
+        --narrow-stage-height: 60vh;
+        --stage-min-height: 320px;
+      }
+      * { box-sizing: border-box; }
+      html, body { margin: 0; padding: 0; height: 100%; background: var(--bg); color: var(--text); }
+      body {
+        font: var(--font-size) / 1.4 system-ui, -apple-system, "Segoe UI", "Noto Sans KR", sans-serif;
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) var(--sidebar-width);
+        grid-template-rows: minmax(0, 1fr);
+        height: 100vh;
+        overflow: hidden;
+      }
+      #stage { position: relative; min-width: 0; min-height: 0; overflow: hidden; }
       /* 터치 드래그가 스크롤·확대로 가로채이지 않게 한다 */
-      canvas { display: block; touch-action: none; }
+      /* 캔버스는 무대 크기를 바꾸지 않도록 띄워 둔다 (크기는 main.ts가 무대에 맞춘다) */
+      canvas { position: absolute; inset: 0 auto auto 0; display: block; touch-action: none; }
+      #sidebar {
+        display: flex; flex-direction: column; gap: var(--gap);
+        padding: var(--gap); background: var(--panel-bg);
+        border-left: 1px solid var(--panel-border); overflow-y: auto; min-width: 0;
+      }
+      #controls { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+      .ctrl-btn {
+        font: inherit; color: var(--text); background: var(--btn-bg);
+        border: 1px solid var(--btn-border); border-radius: var(--radius);
+        padding: 6px 10px; cursor: pointer;
+      }
+      .ctrl-btn:hover:not(:disabled) { background: var(--btn-bg-hover); }
+      .ctrl-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+      .ctrl-primary { background: var(--btn-primary); color: var(--btn-primary-text); border-color: var(--btn-primary); min-width: 7.5em; }
+      .ctrl-primary:hover:not(:disabled) { background: var(--btn-primary); filter: brightness(1.1); }
+      .ctrl-speed { display: inline-flex; gap: 6px; align-items: center; color: var(--text-dim); }
+      .ctrl-speed select {
+        font: inherit; color: var(--text); background: var(--btn-bg);
+        border: 1px solid var(--btn-border); border-radius: var(--radius); padding: 4px 6px;
+      }
+      .ctrl-status { flex-basis: 100%; color: var(--text-dim); font-size: var(--font-size-small); }
+      .ctrl-status-ended { color: var(--ended); }
+      .shortcuts { color: var(--text-dim); font-size: var(--font-size-small); margin: 0; }
+      kbd {
+        font: inherit; border: 1px solid var(--btn-border); border-radius: 3px;
+        padding: 0 4px; background: var(--btn-bg);
+      }
+      .panel-title { font-size: var(--font-size); margin: 0 0 6px; }
+      .panel-subtitle { font-size: var(--font-size-small); color: var(--text-dim); margin: var(--gap) 0 4px; font-weight: normal; }
+      .metrics-summary { display: grid; grid-template-columns: auto 1fr; gap: 4px 12px; margin: 0; }
+      .metrics-summary dt { color: var(--text-dim); cursor: help; }
+      .metrics-summary dd { margin: 0; text-align: right; font-variant-numeric: tabular-nums; }
+      .metrics-modules { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }
+      .metrics-modules th, .metrics-modules td { padding: 3px 4px; text-align: right; border-bottom: 1px solid var(--panel-border); }
+      .metrics-modules th:first-child { text-align: left; }
+      .metrics-modules thead th { color: var(--text-dim); font-weight: normal; font-size: var(--font-size-small); cursor: help; }
+      /* 좁은 화면: 캔버스 위, 패널 아래로 쌓는다 */
+      @media (max-width: 760px) {
+        body {
+          grid-template-columns: minmax(0, 1fr);
+          grid-template-rows: var(--narrow-stage-height) auto;
+          height: auto; min-height: 100vh; overflow: auto;
+        }
+        #stage { min-height: var(--stage-min-height); }
+        #sidebar { border-left: none; border-top: 1px solid var(--panel-border); overflow: visible; }
+      }
     </style>
   </head>
   <body>
-    <canvas id="sim-canvas"></canvas>
+    <main id="stage">
+      <canvas id="sim-canvas"></canvas>
+    </main>
+    <aside id="sidebar">
+      <section id="controls" aria-label="실행 컨트롤"></section>
+      <p class="shortcuts"><kbd>Space</kbd> 재생/정지 · <kbd>→</kbd> 한 단계 · <kbd>R</kbd> 리셋</p>
+      <section id="metrics" aria-label="지표"></section>
+    </aside>
     <script type="module" src="/src/main.ts"></script>
   </body>
 </html>
