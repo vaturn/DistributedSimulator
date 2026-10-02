@@ -126,6 +126,8 @@ export interface MoveInfo {
   moduleId: ModuleId;
   /** 남은 이동 시간(초) */
   remaining: number;
+  /** 이동을 시작할 때 규칙(world.rules.moveTime)이 정한 전체 이동 시간(초). 진행률 계산용 */
+  total: number;
 }
 
 /**

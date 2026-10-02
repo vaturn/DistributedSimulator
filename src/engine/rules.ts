@@ -289,3 +289,147 @@ export function canAssign(world: WorldState, jobId: JobId, moduleId: ModuleId): 
 export function canUnassign(world: WorldState, jobId: JobId): RuleCheck {
   return world.rules.canUnassign(world, jobId);
 }
+
+// ---------- 조회 함수 (감독관·렌더러 공용, 순수 함수: world를 바꾸지 않는다) ----------
+
+/** 작업에 아직 필요한 결과 (required - acquired). 순서는 required 순서. 없는 작업이면 빈 배열 */
+export function remainingResults(world: Readonly<WorldState>, jobId: JobId): ResultType[] {
+  const job = world.jobs.get(jobId);
+  if (!job) return [];
+  return [...job.required].filter((r) => !job.acquired.has(r));
+}
+
+/**
+ * 작업이 이 모듈에서 처리되면 새로 얻는 "필요한" 결과 (gainedResults ∩ 남은 필요 결과).
+ * 빈 배열이면 이 모듈에 배치하는 것은 시간 낭비다. 없는 작업·모듈이면 빈 배열.
+ */
+export function usefulResults(world: Readonly<WorldState>, jobId: JobId, moduleId: ModuleId): ResultType[] {
+  const job = world.jobs.get(jobId);
+  const module = world.modules.get(moduleId);
+  if (!job || !module) return [];
+  const remaining = new Set(remainingResults(world, jobId));
+  const gained = world.rules.gainedResults(world, job, module);
+  return [...new Set(gained)].filter((r) => remaining.has(r));
+}
+
+/** 작업이 이 모듈에서 처리를 마칠 때까지 남은 처리 시간 (현재 progress 반영, 0 이상) */
+export function remainingProcessTime(world: Readonly<WorldState>, jobId: JobId, moduleId: ModuleId): number {
+  const job = world.jobs.get(jobId);
+  const module = world.modules.get(moduleId);
+  if (!job || !module) return 0;
+  const total = world.rules.processTime(world, job, module);
+  const elapsed = job.state === "PROCESSING" ? job.progress : 0;
+  return Math.max(0, total - elapsed);
+}
+
+/** 0~1로 자른다. */
+function clampRatio(x: number): number {
+  return Math.min(1, Math.max(0, x));
+}
+
+/**
+ * 작업의 처리 진행률 (0~1). 처리 시간은 world.rules.processTime을 쓴다.
+ * PROCESSING이면 progress / 처리 시간(처리 시간이 0 이하면 1), DONE_AT_MODULE이면 1, 그 밖의 상태나 없는 작업이면 0.
+ */
+export function processProgressRatio(world: Readonly<WorldState>, jobId: JobId): number {
+  const job = world.jobs.get(jobId);
+  if (!job || job.location.kind !== "module") return 0;
+  if (job.state === "DONE_AT_MODULE") return 1;
+  if (job.state !== "PROCESSING") return 0;
+  const module = world.modules.get(job.location.moduleId);
+  if (!module) return 0;
+  const total = world.rules.processTime(world, job, module);
+  if (total <= 0) return 1;
+  return clampRatio(job.progress / total);
+}
+
+/**
+ * 이동 중인 작업의 이동 진행률 (0~1). 전체 이동 시간은 이동을 시작할 때 world.rules.moveTime이 정한 값(MoveInfo.total)이다.
+ * 전체 이동 시간이 0 이하면 1, 이동 중이 아니거나 없는 작업이면 0.
+ */
+export function moveProgressRatio(world: Readonly<WorldState>, jobId: JobId): number {
+  const move = world.moves.get(jobId);
+  if (!move) return 0;
+  if (move.total <= 0) return 1;
+  return clampRatio(1 - move.remaining / move.total);
+}
+
+export interface WaitEstimateOptions {
+  /** 계산에서 뺄 작업 (보통 배치하려는 작업 자신) */
+  exceptJobId?: JobId;
+  /** 이미 있는 대기열·이동 작업 뒤에 추가로 줄 설 작업 (같은 step에 계획한 배치) */
+  extraJobIds?: readonly JobId[];
+  /**
+   * DONE_AT_MODULE 슬롯을 지금 비울 수 있는 슬롯으로 볼 것인가 (기본 true).
+   * 감독관이 옮겨야 비는 슬롯이므로, 정책 판단에서는 비울 수 있다고 보고, 표시용으로는 false를 줄 수 있다.
+   * false이면 그 슬롯은 계산에서 영원히 차 있는 것으로 본다.
+   */
+  doneSlotsFree?: boolean;
+}
+
+/**
+ * 지금 이 모듈에 새 작업을 넣으면 처리를 시작하기까지의 예상 대기 시간.
+ * 용량 N 모듈은 슬롯 N개가 독립적으로 처리한다고 보고(§2.4), 슬롯별로 비는 시각을 계산한 뒤
+ * 대기열(FIFO) → 이동 중 작업(이동 시작 순서) → extraJobIds 순서로 가장 빨리 비는 슬롯에 넣는다.
+ * 처리 시간은 world.rules.processTime을 쓴다. 모든 슬롯이 무기한 차 있으면 Infinity.
+ * 없는 모듈이면 Infinity.
+ */
+export function estimatedWaitTime(
+  world: Readonly<WorldState>,
+  moduleId: ModuleId,
+  options: WaitEstimateOptions = {},
+): number {
+  const module = world.modules.get(moduleId);
+  if (!module) return Infinity;
+  const { exceptJobId, extraJobIds = [], doneSlotsFree = true } = options;
+
+  // 슬롯별로 비는 시각
+  const slotFree: number[] = [];
+  for (const jobId of module.slots) {
+    if (jobId === exceptJobId) continue;
+    const job = world.jobs.get(jobId);
+    if (!job) continue;
+    if (job.state === "PROCESSING") {
+      slotFree.push(remainingProcessTime(world, jobId, moduleId));
+    } else {
+      slotFree.push(doneSlotsFree ? 0 : Infinity);
+    }
+  }
+  while (slotFree.length < module.capacity) slotFree.push(0);
+  if (slotFree.length === 0) return Infinity;
+
+  // 슬롯을 기다리는 작업: [작업, 슬롯에 들어갈 수 있는 가장 이른 시각]
+  const waiting: [Job, number][] = [];
+  for (const jobId of module.queue) {
+    const job = world.jobs.get(jobId);
+    if (job && jobId !== exceptJobId) waiting.push([job, 0]);
+  }
+  for (const [jobId, move] of world.moves) {
+    const job = world.jobs.get(jobId);
+    if (job && jobId !== exceptJobId && move.moduleId === moduleId) {
+      waiting.push([job, Math.max(0, move.remaining)]);
+    }
+  }
+  for (const jobId of extraJobIds) {
+    const job = world.jobs.get(jobId);
+    if (job && jobId !== exceptJobId) {
+      waiting.push([job, world.rules.moveTime(world, job, moduleId)]);
+    }
+  }
+
+  for (const [job, readyAt] of waiting) {
+    const i = earliestIndex(slotFree);
+    if (slotFree[i] === Infinity) return Infinity;
+    slotFree[i] = Math.max(slotFree[i], readyAt) + world.rules.processTime(world, job, module);
+  }
+  return slotFree[earliestIndex(slotFree)];
+}
+
+/** 가장 작은 값의 인덱스 (동점이면 앞쪽). 빈 배열이면 0 */
+function earliestIndex(values: readonly number[]): number {
+  let best = 0;
+  for (let i = 1; i < values.length; i++) {
+    if (values[i] < values[best]) best = i;
+  }
+  return best;
+}

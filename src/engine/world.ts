@@ -197,7 +197,8 @@ function applyAssign(world: WorldState, jobId: JobId, moduleId: ModuleId): void 
   detach(world, job);
   job.state = "MOVING";
   job.location = { kind: "module", moduleId };
-  world.moves.set(jobId, { from, moduleId, remaining: world.rules.moveTime(world, job, moduleId) });
+  const total = world.rules.moveTime(world, job, moduleId);
+  world.moves.set(jobId, { from, moduleId, remaining: total, total });
 }
 
 function applyUnassign(world: WorldState, jobId: JobId): void {
