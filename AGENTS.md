@@ -32,6 +32,9 @@
 | 화면 없이 실행 | `make sim SCENARIO=basic POLICY=greedy SEED=42` |
 | 정책 비교 | `make compare SCENARIO=basic POLICIES=random,greedy SEED=42` |
 | 정리 | `make clean` / `make distclean` |
+| git 상태 확인 | `make git-status` |
+| 커밋 / 푸시 | `make commit MSG="..."` / `make push` / `make ship MSG="..."` |
+| 원격 동기화 | `make sync` |
 
 ### Makefile과 npm scripts의 약속
 
@@ -55,6 +58,10 @@ Makefile은 아래 npm scripts를 호출한다. `package.json`(M0에서 생성)�
 - 실제 파일을 만들지 않는 타깃은 `.PHONY`에 추가한다.
 - 레시피 들여쓰기는 **탭**이다. 수정한 뒤 `make help`와 `make -n <타깃>`으로 확인한다.
 - 파라미터는 `VAR ?= 기본값` 형태로 위쪽 변수 블록에 둔다.
+
+## git 작업
+
+git 작업(커밋, 푸시, 동기화) 전에 반드시 `docs/GIT.md`를 읽고 따른다.
 
 ## 아키텍처 규칙 (위반 금지)
 

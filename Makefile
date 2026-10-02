@@ -13,9 +13,22 @@ POLICIES ?= random,greedy
 OUT      ?= out
 ARGS     ?=
 
+# git 작업 (규칙: docs/GIT.md)
+GIT_REMOTE ?= origin
+GIT_BRANCH ?= main
+MSG        ?=
+CO_AUTHOR  ?=
+# 커밋에 넣으면 안 되는 경로 패턴 (확장 정규식)
+GIT_FORBIDDEN := (^|/)(node_modules|dist|out)/|(^|/)\.env[^/]*$$|\.(pem|key)$$|(^|/)\.claude/settings\.local\.json$$
+
+# MSG와 CO_AUTHOR는 값을 그대로(make 확장 없이) 환경변수로 넘겨 셸 인용 문제를 피한다.
+override MSG := $(value MSG)
+override CO_AUTHOR := $(value CO_AUTHOR)
+export MSG CO_AUTHOR
+
 SEED_ARG := $(if $(SEED),--seed $(SEED),)
 
-.PHONY: help setup dev build preview test test-watch typecheck check sim compare clean distclean
+.PHONY: help setup dev build preview test test-watch typecheck check sim compare clean distclean git-status commit push ship sync
 
 help: ## 사용 가능한 타깃 목록
 	@echo "사용법: make <타깃> [변수=값]"
@@ -69,3 +82,40 @@ clean: ## 빌드 산출물과 실행 결과 삭제
 
 distclean: clean ## clean + node_modules 삭제
 	rm -rf node_modules
+
+git-status: ## 브랜치, 짧은 상태, 원격과의 차이(ahead/behind) 표시
+	@GIT_TERMINAL_PROMPT=0 git fetch -q $(GIT_REMOTE) $(GIT_BRANCH) || echo "경고: 원격을 가져오지 못했습니다. 마지막으로 알려진 원격 상태로 비교합니다." >&2
+	@git status -sb
+	@set -- $$(git rev-list --left-right --count $(GIT_REMOTE)/$(GIT_BRANCH)...HEAD); \
+		echo "원격 $(GIT_REMOTE)/$(GIT_BRANCH) 대비: ahead $$2, behind $$1"
+
+commit: ## make check 통과 후 전체 변경 커밋 (MSG 필수, CO_AUTHOR 선택)
+	@if [ -z "$$MSG" ]; then echo "오류: MSG가 필요합니다. 예: make commit MSG=\"요약\"" >&2; exit 1; fi
+	@$(MAKE) --no-print-directory check
+	@git add -A
+	@bad=$$(git diff --cached --name-only | grep -E '$(GIT_FORBIDDEN)' || true); \
+		if [ -n "$$bad" ]; then \
+			git reset -q; \
+			echo "오류: 커밋 금지 파일이 스테이징되어 스테이징을 모두 풀었습니다:" >&2; \
+			echo "$$bad" | sed 's/^/  /' >&2; \
+			exit 1; \
+		fi
+	@if git diff --cached --quiet; then echo "커밋할 변경이 없습니다."; exit 0; fi; \
+		if [ -n "$$CO_AUTHOR" ]; then \
+			git commit -q -m "$$MSG" -m "Co-Authored-By: $$CO_AUTHOR"; \
+		else \
+			git commit -q -m "$$MSG"; \
+		fi; \
+		git log -1 --oneline
+
+push: ## 현재 브랜치가 GIT_BRANCH인지 확인 후 푸시 (force 금지)
+	@cur=$$(git rev-parse --abbrev-ref HEAD); \
+		if [ "$$cur" != "$(GIT_BRANCH)" ]; then echo "오류: 현재 브랜치가 $$cur 입니다. $(GIT_BRANCH)에서만 푸시합니다." >&2; exit 1; fi
+	GIT_TERMINAL_PROMPT=0 git push $(GIT_REMOTE) $(GIT_BRANCH)
+
+ship: ## commit 다음 push (MSG 필수, CO_AUTHOR 선택)
+	@$(MAKE) --no-print-directory commit
+	@$(MAKE) --no-print-directory push
+
+sync: ## 원격 변경을 rebase로 가져오기
+	GIT_TERMINAL_PROMPT=0 git pull --rebase $(GIT_REMOTE) $(GIT_BRANCH)

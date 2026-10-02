@@ -86,6 +86,7 @@ sim/
 ├─ plan/planing.md          # 이 문서
 ├─ AGENTS.md / CLAUDE.md    # 에이전트 작업 지침 (CLAUDE.md는 AGENTS.md를 불러온다)
 ├─ Makefile                 # 모든 작업 명령의 진입점
+├─ docs/GIT.md              # git 작업 규칙 (커밋, 푸시, make 타깃)
 ├─ index.html
 ├─ package.json / tsconfig.json / vite.config.ts
 ├─ src/
