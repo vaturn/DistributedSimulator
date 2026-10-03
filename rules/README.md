@@ -32,6 +32,17 @@ make compare SCENARIO=basic POLICIES=greedy,fastest SEED=42
 make typecheck                                          # rules/도 타입 검사 대상
 ```
 
+### 예시: 순서 제약만 다른 두 룰 (`sequential.ts`, `immediate.ts`)
+
+대표 시나리오 `ab-batch`/`ab-stream`(plan/planing.md §5.2)에서 비교하는 룰이다. 둘 다 빈 모듈(`freeSlots() > 0`이고 `queueLength() === 0`)에만 배치하고, 대기 구역 작업을 생성 순으로 보며, 같은 step에 이미 요청한 모듈은 슬롯을 쓴 것으로 센다.
+
+- `sequential`: 작업의 `required()` 순서에서 아직 얻지 못한 첫 결과만 받는다. 그 결과를 주는 빈 모듈이 없으면 기다린다.
+- `immediate`: `remaining()` 중 아무 결과나, 그 결과를 주는 빈 모듈이 있으면(시나리오 순서로 첫 모듈) 바로 넣는다.
+
+```bash
+make compare SCENARIO=ab-batch POLICIES=sequential,immediate
+```
+
 ## 2. 동작 방식
 
 - 매 step마다 `decide(ctx)`가 불린다. `ctx`로 월드를 읽고 작업에 `assignTo`/`unassign`을 **요청**한다. 요청은 step이 시작될 때 엔진에 Command로 넘어가고, 상태는 그 step이 진행되면서 바뀐다. 그래서 `assignTo` 직후에도 `job.state`는 그대로다.

@@ -92,8 +92,11 @@ function fnv1a(text: string): string {
   return h.toString(16).padStart(8, "0");
 }
 
+/** 스냅샷을 만들 때 있던 내장 시나리오. 그 뒤에 추가된 시나리오는 옮기기 전 구현으로 만든 값이 없으므로 제외한다. */
+const SNAPSHOT_SCENARIOS: readonly string[] = ["basic", "parallel", "wide"];
+
 const CASES: { name: string; scenario: Scenario }[] = [
-  ...SCENARIOS.map((e) => ({ name: e.name, scenario: e.scenario })),
+  ...SCENARIOS.filter((e) => SNAPSHOT_SCENARIOS.includes(e.name)).map((e) => ({ name: e.name, scenario: e.scenario })),
   { name: UNASSIGN_SCENARIO.name, scenario: UNASSIGN_SCENARIO },
 ];
 

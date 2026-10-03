@@ -249,6 +249,24 @@ interface Scenario {
 }
 ```
 
+### 5.2 대표 시나리오: A·B 순차 vs 즉시
+
+결과 A, B를 주는 모듈 두 개(처리 시간 2초, 용량 1로 같음)에 모든 작업이 A와 B를 둘 다 필요로 하는 상황에서 두 감독관 전략을 비교한다.
+
+- 시나리오 (`src/scenarios/`)
+  - `ab-batch` ("A·B 일괄 20개"): 초기 작업 20개, 도착 없음, 종료 조건 `allDone`. 모든 작업 완료 시각(makespan)을 비교한다.
+  - `ab-stream` ("A·B 연속 도착"): 초기 작업 4개 + 포아송 도착(rate 0.4개/초), 300초. 작업마다 두 모듈을 한 번씩 거치므로 모듈 하나가 감당하는 작업은 1/2초 = 0.5개/초가 상한이고, 0.4는 그 80% 부하다.
+- 전략 (`rules/`). 둘 다 빈 모듈(빈 슬롯이 있고 대기열이 없음)에만 배치하고, 경합하면 먼저 생긴 작업이 우선이다. 차이는 순서 제약 하나다.
+  - `sequential` (순차): 작업의 `required` 순서대로만 결과를 받는다(A를 얻은 뒤에야 B).
+  - `immediate` (즉시): 남은 결과 중 아무거나, 그 결과를 주는 모듈이 비어 있으면 바로 넣는다.
+- 이론값(ab-batch, 작업 N개, 처리 시간 T): 즉시는 두 모듈이 처음부터 쉬지 않아 makespan ≈ N·T, 순차는 시작할 때 B 모듈이 T 동안 놀아서 ≈ N·T + T. 실제 40초 vs 42초로 일치한다.
+- 비교 방법
+
+  ```bash
+  make compare SCENARIO=ab-batch POLICIES=sequential,immediate
+  make compare SCENARIO=ab-stream POLICIES=sequential,immediate SEED=42
+  ```
+
 ## 6. 시뮬레이션 루프
 
 - **고정 시간 간격(fixed timestep)**을 쓴다. 기본 `dt = 0.1` 시뮬레이션 초.

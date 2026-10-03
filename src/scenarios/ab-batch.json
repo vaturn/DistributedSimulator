@@ -1,0 +1,24 @@
+{
+  "name": "ab-batch",
+  "seed": 42,
+  "modules": [
+    { "id": "MA", "resultType": "A", "processTime": 2, "capacity": 1 },
+    { "id": "MB", "resultType": "B", "processTime": 2, "capacity": 1 }
+  ],
+  "jobs": {
+    "initial": [
+      { "required": ["A", "B"] }, { "required": ["A", "B"] }, { "required": ["A", "B"] }, { "required": ["A", "B"] },
+      { "required": ["A", "B"] }, { "required": ["A", "B"] }, { "required": ["A", "B"] }, { "required": ["A", "B"] },
+      { "required": ["A", "B"] }, { "required": ["A", "B"] }, { "required": ["A", "B"] }, { "required": ["A", "B"] },
+      { "required": ["A", "B"] }, { "required": ["A", "B"] }, { "required": ["A", "B"] }, { "required": ["A", "B"] },
+      { "required": ["A", "B"] }, { "required": ["A", "B"] }, { "required": ["A", "B"] }, { "required": ["A", "B"] }
+    ],
+    "arrival": { "kind": "none" }
+  },
+  "config": {
+    "moveTime": 0,
+    "occupyWhenDone": false,
+    "cancelOnMove": true,
+    "endCondition": { "kind": "allDone" }
+  }
+}

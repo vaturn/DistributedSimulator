@@ -1,0 +1,20 @@
+{
+  "name": "ab-stream",
+  "seed": 42,
+  "modules": [
+    { "id": "MA", "resultType": "A", "processTime": 2, "capacity": 1 },
+    { "id": "MB", "resultType": "B", "processTime": 2, "capacity": 1 }
+  ],
+  "jobs": {
+    "initial": [
+      { "required": ["A", "B"] }, { "required": ["A", "B"] }, { "required": ["A", "B"] }, { "required": ["A", "B"] }
+    ],
+    "arrival": { "kind": "poisson", "rate": 0.4, "requiredPool": ["A", "B"], "minReq": 2, "maxReq": 2 }
+  },
+  "config": {
+    "moveTime": 0,
+    "occupyWhenDone": false,
+    "cancelOnMove": true,
+    "endCondition": { "kind": "time", "value": 300 }
+  }
+}
