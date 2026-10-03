@@ -46,7 +46,7 @@ export type Command =
 
 export type SimEvent =
   | {
-      type: "jobArrived" | "processStarted" | "processFinished" | "jobCompleted" | "processCancelled";
+      type: "jobArrived" | "processStarted" | "processFinished" | "jobCompleted" | "processCancelled" | "jobReturned";
       jobId: JobId;
       moduleId?: ModuleId;
       t: number;
@@ -66,7 +66,10 @@ export interface SimConfig {
   dt: number;
   /** 대기 구역/모듈 → 모듈 이동 시간(초). 0이면 즉시 */
   moveTime: number;
-  /** 처리 끝난 작업이 감독관이 옮길 때까지 모듈 슬롯을 점유하는가 */
+  /**
+   * 처리 끝난 작업이 감독관이 옮길 때까지 모듈 슬롯을 점유하는가.
+   * false(기본)면 완료되지 않은 작업은 처리가 끝난 step에 슬롯을 비우고 대기 구역으로 돌아간다(jobReturned).
+   */
   occupyWhenDone: boolean;
   /** true: 처리 중 이동하면 처리 취소(결과 없음), false: 처리 중 이동 금지 */
   cancelOnMove: boolean;
@@ -80,7 +83,7 @@ export interface SimConfig {
 export const DEFAULT_CONFIG: Readonly<SimConfig> = Object.freeze({
   dt: 0.1,
   moveTime: 0,
-  occupyWhenDone: true,
+  occupyWhenDone: false,
   cancelOnMove: true,
   queueLimit: null,
   endCondition: Object.freeze({ kind: "time", value: 300 }),

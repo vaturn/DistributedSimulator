@@ -1,5 +1,5 @@
 // CLI 인자 파서 (순수 함수). node API를 쓰지 않는다.
-// 지원 인자: --scenario, --policy, --seed, --compare, --replay, --out, --help (`--키 값` 또는 `--키=값`)
+// 지원 인자: --scenario, --policy, --seed, --compare, --replay, --out, --list, --help (`--키 값` 또는 `--키=값`)
 
 /** 파싱된 CLI 옵션 */
 export interface CliOptions {
@@ -15,6 +15,8 @@ export interface CliOptions {
   replay?: string;
   /** 결과 JSON을 저장할 디렉터리 */
   out?: string;
+  /** 정책 목록(내장 + rules/)과 룰 로드 오류 출력 (make rules) */
+  list?: boolean;
   /** 도움말 출력 */
   help: boolean;
 }
@@ -34,14 +36,16 @@ export const USAGE = [
   "사용법: tsx src/cli/run.ts --scenario <이름|파일.json> --policy <정책> [--seed <정수>] [--out <디렉터리>]",
   "       tsx src/cli/run.ts --scenario <이름|파일.json> --compare <a,b,...> [--seed <정수>] [--out <디렉터리>]",
   "       tsx src/cli/run.ts --replay <결과.json>",
+  "       tsx src/cli/run.ts --list",
   "",
   "  --scenario <이름|경로>  시나리오 이름 또는 .json 파일 경로",
-  "  --policy <이름>         감독관 정책 이름",
+  "  --policy <이름>         감독관 정책 이름 (내장 정책 또는 rules/의 룰 이름)",
   "  --seed <정수>           시드 (생략하면 시나리오의 seed)",
   "  --compare <a,b,...>     여러 정책을 같은 시나리오·시드로 실행해 지표 비교 (--policy 대신)",
   "  --replay <결과.json>    결과 JSON의 명령 로그를 재생해 지표가 같은지 확인 (단독으로 쓴다)",
   "  --out <디렉터리>        결과 JSON 저장 위치 (<시나리오>-<정책>-<시드>.json,",
   "                          비교 요약은 <시나리오>-compare-<시드>.json)",
+  "  --list                  정책 목록(내장 + rules/)과 룰 로드 오류 출력 (단독으로 쓴다)",
   "  --help                  이 도움말",
 ].join("\n");
 
@@ -72,6 +76,12 @@ export function parseArgs(argv: readonly string[]): CliOptions | ArgsError {
     if (name === "help") {
       if (eq >= 0) return { error: "--help는 값을 받지 않습니다." };
       options.help = true;
+      continue;
+    }
+    if (name === "list") {
+      if (eq >= 0) return { error: "--list는 값을 받지 않습니다." };
+      if (options.list) return { error: "--list 옵션이 두 번 지정되었습니다." };
+      options.list = true;
       continue;
     }
     if (!isValueOption(name)) {

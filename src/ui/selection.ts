@@ -160,3 +160,22 @@ export function selectionFromSelectValues(values: Selection, last: Selection): S
     scenario: values.scenario === REPLAY_OPTION_VALUE ? last.scenario : values.scenario,
   };
 }
+
+/** 사용자 편집 시나리오의 선택 값 (?scenario=custom) */
+export const CUSTOM_SCENARIO = "custom";
+/** 사용자 편집 시나리오 옵션 라벨 */
+export const CUSTOM_SCENARIO_LABEL = "사용자 편집";
+
+/**
+ * 내장 시나리오 목록 + 사용자 편집 시나리오(있으면 맨 끝).
+ * 편집 시나리오의 선택 값은 CUSTOM_SCENARIO로 고정하고, 결과 파일·화면에 쓰는 이름은 withCustomScenarioName이 정한다.
+ */
+export function scenariosWithCustom(builtins: readonly ScenarioLike[], custom: Scenario | null): ScenarioLike[] {
+  const list = builtins.filter((s) => s.name !== CUSTOM_SCENARIO);
+  return custom ? [...list, { name: CUSTOM_SCENARIO, label: CUSTOM_SCENARIO_LABEL, scenario: custom }] : list;
+}
+
+/** 세션 설정의 시나리오 이름: 편집 시나리오면 그 시나리오 JSON의 name, 아니면 그대로 */
+export function withCustomScenarioName(config: SessionConfig): SessionConfig {
+  return config.scenarioName === CUSTOM_SCENARIO ? { ...config, scenarioName: config.scenario.name } : config;
+}

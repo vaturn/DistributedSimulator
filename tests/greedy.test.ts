@@ -113,6 +113,28 @@ describe("greedy 감독관", () => {
     expect(events.filter((e) => e.type === "warning")).toEqual([]);
   });
 
+  it("occupyWhenDone=false면 자동 복귀한 작업을 대기 구역에서 다시 배치해 모두 완료한다", () => {
+    const scenario = makeScenario({
+      modules: [
+        { id: "ma", resultType: "a", processTime: 1 },
+        { id: "mb", resultType: "b", processTime: 2 },
+      ],
+      initial: [["a", "b"], ["a", "b"], ["b", "a"], ["a"], ["a", "z"]],
+      config: { occupyWhenDone: false, endCondition: { kind: "time", value: 60 } },
+    });
+    const { world, events, commands } = runWithSupervisor(scenario, createGreedySupervisor());
+    expect(world.completedCount).toBe(4);
+    for (const id of ["J1", "J2", "J3", "J4"]) expect(world.jobs.get(id)?.state).toBe("COMPLETED");
+    expect(world.jobs.get("J5")?.state).toBe("POOL");
+    expect(world.jobs.get("J5")?.acquired.has("a")).toBe(true);
+    for (const m of world.modules.values()) expect(m.slots).toEqual([]);
+    // 슬롯을 비우는 unassign이 필요 없다
+    expect(commands.filter((c) => c.type === "unassign")).toEqual([]);
+    // 결과가 둘 필요한 작업 3개는 첫 처리 뒤 한 번씩 자동 복귀한다
+    expect(events.filter((e) => e.type === "jobReturned").length).toBeGreaterThanOrEqual(3);
+    expect(events.filter((e) => e.type === "warning")).toEqual([]);
+  });
+
   it("view를 바꾸지 않는다", () => {
     const sup = createGreedySupervisor();
     const world = createWorld(BASIC);

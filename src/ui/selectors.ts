@@ -23,6 +23,8 @@ export interface Selectors {
    * 그래서 리플레이 중에도 이전과 같은 감독관·시나리오를 다시 고를 수 있다.
    */
   showReplay(labels: ReplaySelectLabels | null): void;
+  /** 시나리오 옵션 목록을 바꾼다 (사용자 편집 시나리오가 생겼을 때). 표시 값은 다음 set에서 맞춘다. */
+  setScenarioOptions(options: readonly SelectOption[]): void;
 }
 
 /** 라벨과 설명 */
@@ -35,6 +37,17 @@ const TITLES = {
   scenario: "시나리오를 바꾸면 그 시나리오(시나리오 seed)로 처음부터 다시 시작합니다",
 } as const;
 
+function fillOptions(select: HTMLSelectElement, options: readonly SelectOption[]): void {
+  select.replaceChildren(
+    ...options.map((o) => {
+      const opt = document.createElement("option");
+      opt.value = o.value;
+      opt.textContent = o.label;
+      return opt;
+    }),
+  );
+}
+
 function labeledSelect(text: string, title: string, options: readonly SelectOption[]): {
   label: HTMLLabelElement;
   select: HTMLSelectElement;
@@ -45,12 +58,7 @@ function labeledSelect(text: string, title: string, options: readonly SelectOpti
   const span = document.createElement("span");
   span.textContent = text;
   const select = document.createElement("select");
-  for (const o of options) {
-    const opt = document.createElement("option");
-    opt.value = o.value;
-    opt.textContent = o.label;
-    select.append(opt);
-  }
+  fillOptions(select, options);
   label.append(span, select);
   return { label, select };
 }
@@ -106,6 +114,10 @@ export function createSelectors(
     addReplayOption(sup.select, labels.supervisor);
     addReplayOption(scn.select, labels.scenario);
   };
+  const setScenarioOptions = (options: readonly SelectOption[]): void => {
+    fillOptions(scn.select, options);
+    scn.select.value = last.scenario;
+  };
   set(initial);
-  return { set, showReplay };
+  return { set, showReplay, setScenarioOptions };
 }

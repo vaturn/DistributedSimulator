@@ -10,3 +10,17 @@ export interface Supervisor {
   /** 매 step 호출된다. view를 바꾸지 않고 이번 step에 적용할 명령을 돌려준다. */
   decide(view: WorldView): Command[];
 }
+
+/** 정책 감독관 목록의 항목 (supervisor/registry). 화면의 감독관 선택과 CLI의 --policy가 같은 항목을 쓴다. */
+export interface PolicyEntry {
+  /** CLI와 결과 파일에 쓰는 이름 */
+  name: string;
+  /** 화면에 보이는 이름 */
+  label: string;
+  /** 감독관을 만든다. 난수를 쓰지 않는 정책은 seed를 무시한다. */
+  create(seed: number): Supervisor;
+  /** 룰 정책이면 정의한 파일 경로 (예: "rules/greedy.ts") */
+  source?: string;
+  /** 룰 정책이면 룰 클래스 (같은 룰이 두 경로로 등록될 때 알아보는 데 쓴다) */
+  ruleClass?: abstract new () => unknown;
+}

@@ -7,6 +7,7 @@ import {
   EXIT_ERROR,
   EXIT_OK,
   EXIT_UNSUPPORTED,
+  cliPolicies,
   isScenarioPath,
   resultFilePath,
   runCli,
@@ -15,6 +16,7 @@ import { type RunResult, parseRunResult } from "../src/engine/report";
 import type { Metrics } from "../src/engine/types";
 import { findScenario } from "../src/scenarios";
 import { POLICIES } from "../src/supervisor/registry";
+import { BROWSER_RULES } from "../src/supervisor/rules.browser";
 
 /** 메모리 위의 가짜 IO */
 function memoryIo(files: Record<string, string> = {}) {
@@ -422,5 +424,68 @@ describe("runCli --replay", () => {
     expect(m.stderr()).toContain("읽지 못했습니다");
     expect(m.stderr()).toContain("올바르지 않습니다");
     expect(m.stderr()).toContain("version");
+  });
+});
+
+describe("rules/ 룰 정책 (--policy, --compare, --list)", () => {
+  const withRules = () => cliPolicies(BROWSER_RULES);
+
+  it("--list 파싱: 값 없이 한 번만", () => {
+    expect(parsed(["--list"])).toEqual({ help: false, list: true });
+    expect(parseArgs(["--list=1"])).toEqual({ error: "--list는 값을 받지 않습니다." });
+    expect(isArgsError(parseArgs(["--list", "--list"]))).toBe(true);
+  });
+
+  it("룰 이름으로 단독 실행과 비교를 한다", () => {
+    const single = memoryIo();
+    expect(runCli(opts({ scenario: "basic", policy: "fastest", seed: 42 }), single.io, withRules())).toBe(EXIT_OK);
+    expect(single.stdout()).toContain("fastest");
+    expect(single.stderr()).toBe("");
+
+    const cmp = memoryIo();
+    expect(
+      runCli(opts({ scenario: "basic", compare: ["random", "greedy", "fastest"], seed: 42 }), cmp.io, withRules()),
+    ).toBe(EXIT_OK);
+    expect(cmp.stdout()).toContain("fastest");
+  });
+
+  it("같은 seed면 룰 실행 결과 파일이 같다", () => {
+    const a = memoryIo();
+    const b = memoryIo();
+    runCli(opts({ scenario: "basic", policy: "fastest", seed: 3, out: "o" }), a.io, withRules());
+    runCli(opts({ scenario: "basic", policy: "fastest", seed: 3, out: "o" }), b.io, withRules());
+    const path = resultFilePath("o", "basic", "fastest", 3);
+    expect(a.store.get(path)).toBeDefined();
+    expect(a.store.get(path)).toBe(b.store.get(path));
+  });
+
+  it("룰을 넘기지 않으면 내장 정책만 있어 룰 이름을 찾지 못한다", () => {
+    const m = memoryIo();
+    expect(runCli(opts({ scenario: "basic", policy: "fastest" }), m.io)).toBe(EXIT_ERROR);
+    expect(m.stderr()).toContain("정책을 찾을 수 없습니다");
+  });
+
+  it("룰 로드 오류는 경고로 알리고 실행은 계속한다", () => {
+    const policies = cliPolicies({ entries: BROWSER_RULES.entries, errors: ["rules/bad.ts: 형식 오류"] }, [
+      "rules/broken.ts: 파일을 불러오지 못했습니다",
+    ]);
+    const m = memoryIo();
+    expect(runCli(opts({ scenario: "basic", policy: "fastest", seed: 1 }), m.io, policies)).toBe(EXIT_OK);
+    expect(m.stderr()).toContain("경고: 룰을 불러오지 못했습니다: rules/broken.ts");
+    expect(m.stderr()).toContain("rules/bad.ts: 형식 오류");
+  });
+
+  it("--list는 정책 목록을 출력하고, 룰 로드 오류가 있으면 오류 코드", () => {
+    const ok = memoryIo();
+    expect(runCli(opts({ list: true }), ok.io, withRules())).toBe(EXIT_OK);
+    for (const name of ["random", "greedy", "fastest", "rules/fastestModule.ts"]) expect(ok.stdout()).toContain(name);
+
+    const bad = memoryIo();
+    const policies = cliPolicies(BROWSER_RULES, ["rules/broken.ts: 파일을 불러오지 못했습니다"]);
+    expect(runCli(opts({ list: true }), bad.io, policies)).toBe(EXIT_ERROR);
+    expect(bad.stdout()).toContain("fastest");
+    expect(bad.stderr()).toContain("rules/broken.ts");
+
+    expect(runCli(opts({ list: true, scenario: "basic" }), memoryIo().io)).toBe(EXIT_UNSUPPORTED);
   });
 });

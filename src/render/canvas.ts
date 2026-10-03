@@ -1,10 +1,12 @@
 // Canvas 2D 렌더러. 엔진 상태(WorldState)를 읽기만 하고 절대 바꾸지 않는다.
-// 진행률처럼 규칙에 속하는 값은 직접 계산하지 않고 engine/rules.ts의 조회 함수만 쓴다.
+// 진행률·남은 결과처럼 규칙에 속하는 값은 직접 계산하지 않고 engine/rules.ts의 조회 함수만 쓴다
+// (작업 라벨·툴팁 글자는 jobLabel.ts가 그 함수들로 만든다).
 
 import { processProgressRatio } from "../engine/rules";
-import type { Job, Module, WorldState } from "../engine/types";
+import type { Job, JobId, Module, WorldState } from "../engine/types";
 import type { DragView, TooltipLine } from "./input";
-import { poolCapacity, slotCenter, type Layout, type ModuleLayout, type Point, type Rect } from "./layout";
+import { jobSlices, jobTooltipLines, LEGEND_NOTE, legendItems, remainingCaption, resultLabel } from "./jobLabel";
+import { poolCapacity, queueJobCenter, slotCenter, type Layout, type ModuleLayout, type Point, type Rect } from "./layout";
 import type { ResultColors } from "./palette";
 import {
   movingPlacements,
@@ -17,7 +19,30 @@ import {
 } from "./placement";
 import type { Toast } from "./toasts";
 import {
+  BADGE_FONT_SIZE,
+  BADGE_INSET,
+  BADGE_PADDING_X,
   COLORS,
+  FONT_WEIGHT_BOLD,
+  GAP,
+  HOVER_MODULE_ALPHA,
+  HOVER_MODULE_OFFSET,
+  HOVER_MODULE_WIDTH,
+  HOVER_RING_OFFSET,
+  HOVER_RING_WIDTH,
+  HOVER_TOOLTIP_MAX_LINES,
+  JOB_SLICE_START_ANGLE,
+  JOB_SPACING,
+  LEGEND_FONT_SIZE,
+  LEGEND_ITEM_GAP,
+  LEGEND_SWATCH,
+  SLICE_LABEL_DISTANCE_RATIO,
+  SLICE_LABEL_FONT_MAX,
+  SLICE_LABEL_FONT_MIN,
+  SLICE_LABEL_FONT_RATIO,
+  SLICE_LABEL_MIN_RADIUS,
+  SLICE_REMAINING_TINT_ALPHA,
+  SMALL_CAPTION_GAP,
   DONE_RING_DASH,
   DRAG_GHOST_ALPHA,
   DRAG_JOB_ALPHA,
@@ -78,8 +103,8 @@ const EMPTY_OVERLAY: RenderOverlay = { drag: null, toasts: [], now: 0 };
 
 type Ctx = CanvasRenderingContext2D;
 
-function font(size: number): string {
-  return `${size}px ${FONT_FAMILY}`;
+function font(size: number, weight = ""): string {
+  return `${weight ? `${weight} ` : ""}${size}px ${FONT_FAMILY}`;
 }
 
 function roundRect(ctx: Ctx, r: Rect, radius: number): void {
@@ -87,26 +112,28 @@ function roundRect(ctx: Ctx, r: Rect, radius: number): void {
   ctx.roundRect(r.x, r.y, r.w, r.h, radius);
 }
 
-/** 작업에 필요한 결과를 결정적인 순서(시나리오 결과 순서)로 정렬한다. */
-function sortedRequired(job: Job, colors: ResultColors): string[] {
-  return [...job.required].sort((a, b) => colors.indexOf(a) - colors.indexOf(b) || (a < b ? -1 : a > b ? 1 : 0));
-}
-
-/** 작업 원: 필요 결과 수만큼 파이 조각으로 나누고, 얻은 조각은 채우고 못 얻은 조각은 테두리만 둔다. */
-function drawJob(ctx: Ctx, job: Job, center: Point, radius: number, colors: ResultColors): void {
-  const required = sortedRequired(job, colors);
-  const n = Math.max(1, required.length);
+/**
+ * 작업 원: 필요 결과 수만큼 파이 조각으로 나눈다. 얻은 조각은 결과 색으로 채우고 라벨에 체크 표시를 붙이며,
+ * 남은 조각은 결과 색을 옅게만 깔고 테두리를 둔다. 원이 충분히 크면 조각마다 결과 라벨을 쓴다.
+ */
+function drawJob(ctx: Ctx, world: WorldState, jobId: JobId, center: Point, radius: number, colors: ResultColors): void {
+  const slices = jobSlices(world, jobId, colors);
+  const n = Math.max(1, slices.length);
   const sweep = FULL_TURN / n;
-  required.forEach((r, i) => {
-    const a0 = START_ANGLE + i * sweep;
-    const a1 = a0 + sweep;
+  slices.forEach((slice, i) => {
+    const a0 = JOB_SLICE_START_ANGLE + i * sweep;
     ctx.beginPath();
     ctx.moveTo(center.x, center.y);
-    ctx.arc(center.x, center.y, radius, a0, a1);
+    ctx.arc(center.x, center.y, radius, a0, a0 + sweep);
     ctx.closePath();
-    const color = colors.colorOf(r);
-    ctx.fillStyle = job.acquired.has(r) ? color : COLORS.sliceEmptyFill;
+    const color = colors.colorOf(slice.result);
+    ctx.fillStyle = COLORS.sliceEmptyFill;
     ctx.fill();
+    ctx.save();
+    if (!slice.acquired) ctx.globalAlpha *= SLICE_REMAINING_TINT_ALPHA;
+    ctx.fillStyle = color;
+    ctx.fill();
+    ctx.restore();
     ctx.strokeStyle = color;
     ctx.lineWidth = JOB_OUTLINE_WIDTH;
     ctx.stroke();
@@ -116,6 +143,31 @@ function drawJob(ctx: Ctx, job: Job, center: Point, radius: number, colors: Resu
   ctx.strokeStyle = COLORS.jobOutline;
   ctx.lineWidth = JOB_OUTLINE_WIDTH;
   ctx.stroke();
+
+  if (radius < SLICE_LABEL_MIN_RADIUS) return;
+  const size = Math.min(SLICE_LABEL_FONT_MAX, Math.max(SLICE_LABEL_FONT_MIN, radius * SLICE_LABEL_FONT_RATIO));
+  ctx.font = font(size, FONT_WEIGHT_BOLD);
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  const d = n === 1 ? 0 : radius * SLICE_LABEL_DISTANCE_RATIO;
+  // 조각 안에 들어가는 너비: 조각이 하나면 원 지름 일부, 여럿이면 원 테두리까지 거리와 이웃 조각 경계까지 거리 중 작은 쪽
+  const maxW =
+    n === 1 ? radius * 2 * SLICE_LABEL_DISTANCE_RATIO : 2 * Math.min(radius - d, d * Math.sin(Math.min(sweep, Math.PI) / 2));
+  slices.forEach((slice, i) => {
+    const mid = JOB_SLICE_START_ANGLE + (i + 0.5) * sweep;
+    ctx.fillStyle = slice.acquired ? COLORS.sliceAcquiredText : COLORS.sliceRemainingText;
+    ctx.fillText(slice.label, center.x + d * Math.cos(mid), center.y + d * Math.sin(mid), maxW);
+  });
+}
+
+/** 작은 원(조각 라벨이 안 들어감) 아래에 남은 결과 라벨을 붙인다. */
+function drawSmallJobCaption(ctx: Ctx, world: WorldState, jobId: JobId, center: Point, radius: number, colors: ResultColors): void {
+  if (radius >= SLICE_LABEL_MIN_RADIUS) return;
+  ctx.font = font(FONT_SIZE_SMALL);
+  ctx.fillStyle = COLORS.text;
+  ctx.textAlign = "center";
+  ctx.textBaseline = "top";
+  ctx.fillText(remainingCaption(world, jobId, colors), center.x, center.y + radius + SMALL_CAPTION_GAP, 2 * radius + JOB_SPACING);
 }
 
 function drawProgressRing(ctx: Ctx, center: Point, radius: number, ratio: number): void {
@@ -163,15 +215,24 @@ function drawCaption(ctx: Ctx, text: string, center: Point, radius: number, colo
   ctx.fillText(text, center.x, center.y + radius + PROGRESS_RING_OFFSET + PROGRESS_RING_WIDTH);
 }
 
-/** 드래그 중인 작업은 원래 자리를 반투명하게 그린다. */
+/** 드래그 중인 작업은 원래 자리를 반투명하게, hover 중인 작업은 강조 링을 둘러 그린다. */
 function drawPlacedJob(ctx: Ctx, world: WorldState, p: JobPlacement, info: RenderInfo, overlay: RenderOverlay): Job | null {
   const job = world.jobs.get(p.jobId);
   if (!job) return null;
-  const ghost = overlay.drag?.jobId === p.jobId;
+  const pointed = overlay.drag?.jobId === p.jobId;
+  const ghost = pointed && overlay.drag?.mode === "drag";
   ctx.save();
   if (ghost) ctx.globalAlpha = DRAG_GHOST_ALPHA;
-  drawJob(ctx, job, p.center, p.radius, info.colors);
+  drawJob(ctx, world, job.id, p.center, p.radius, info.colors);
+  drawSmallJobCaption(ctx, world, job.id, p.center, p.radius, info.colors);
   ctx.restore();
+  if (pointed && !ghost) {
+    ctx.beginPath();
+    ctx.arc(p.center.x, p.center.y, p.radius + HOVER_RING_OFFSET, 0, FULL_TURN);
+    ctx.strokeStyle = COLORS.hoverRing;
+    ctx.lineWidth = HOVER_RING_WIDTH;
+    ctx.stroke();
+  }
   return job;
 }
 
@@ -179,6 +240,10 @@ function drawPlacedJob(ctx: Ctx, world: WorldState, p: JobPlacement, info: Rende
 function drawModuleDropHint(ctx: Ctx, ml: ModuleLayout, overlay: RenderOverlay): void {
   const drag = overlay.drag;
   if (!drag) return;
+  if (drag.mode === "hover") {
+    drawModuleHoverHint(ctx, ml, drag);
+    return;
+  }
   const h = drag.moduleHints.get(ml.id);
   if (!h) return;
   const hovered = drag.target.kind === "module" && drag.target.moduleId === ml.id;
@@ -193,6 +258,37 @@ function drawModuleDropHint(ctx: Ctx, ml: ModuleLayout, overlay: RenderOverlay):
   ctx.stroke();
 }
 
+/** hover 중: 작업의 남은 결과를 주는 모듈(assignHint.useful)을 상자 바깥 얇은 테두리로 은은하게 강조 */
+function drawModuleHoverHint(ctx: Ctx, ml: ModuleLayout, drag: DragView): void {
+  if (!drag.moduleHints.get(ml.id)?.hint.useful) return;
+  const o = HOVER_MODULE_OFFSET;
+  ctx.save();
+  ctx.globalAlpha = HOVER_MODULE_ALPHA;
+  ctx.strokeStyle = COLORS.hoverUseful;
+  ctx.lineWidth = HOVER_MODULE_WIDTH;
+  roundRect(ctx, { x: ml.box.x - o, y: ml.box.y - o, w: ml.box.w + 2 * o, h: ml.box.h + 2 * o }, MODULE_CORNER_RADIUS + o);
+  ctx.stroke();
+  ctx.restore();
+}
+
+/** 모듈 제목 줄 왼쪽의 결과 배지: 결과 색 바탕에 결과 라벨 (작업 조각과 같은 색·라벨). 배지 오른쪽 x를 돌려준다. */
+function drawResultBadge(ctx: Ctx, module: Module, ml: ModuleLayout, color: string): number {
+  const label = resultLabel(module.resultType);
+  ctx.font = font(BADGE_FONT_SIZE, FONT_WEIGHT_BOLD);
+  const h = Math.max(0, ml.header.h - 2 * BADGE_INSET);
+  const w = Math.max(h, ctx.measureText(label).width + 2 * BADGE_PADDING_X);
+  const r: Rect = { x: ml.header.x + BADGE_INSET, y: ml.header.y + BADGE_INSET, w, h };
+  roundRect(ctx, r, MODULE_CORNER_RADIUS);
+  ctx.fillStyle = color;
+  ctx.fill();
+  ctx.fillStyle = COLORS.badgeText;
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  const c = rectCenter(r);
+  ctx.fillText(label, c.x, c.y, w);
+  return r.x + r.w;
+}
+
 function drawModule(
   ctx: Ctx,
   world: WorldState,
@@ -202,7 +298,7 @@ function drawModule(
   overlay: RenderOverlay,
 ): void {
   const color = info.colors.colorOf(module.resultType);
-  const blocked = overlay.drag?.moduleHints.get(ml.id)?.level === "blocked";
+  const blocked = overlay.drag?.mode === "drag" && overlay.drag.moduleHints.get(ml.id)?.level === "blocked";
 
   ctx.save();
   if (blocked) ctx.globalAlpha = DROP_BLOCKED_ALPHA;
@@ -212,7 +308,7 @@ function drawModule(
   ctx.fillStyle = COLORS.moduleFill;
   ctx.fill();
 
-  // 제목 줄: 결과 색을 옅게 깔고 "ID · 결과 · 처리 시간 · 용량"
+  // 제목 줄: 결과 색을 옅게 깔고 [결과 배지] "ID · 처리 시간 · 용량"
   ctx.save();
   roundRect(ctx, ml.box, MODULE_CORNER_RADIUS);
   ctx.clip();
@@ -226,13 +322,15 @@ function drawModule(
   ctx.lineWidth = MODULE_BORDER_WIDTH;
   ctx.stroke();
 
+  const badgeRight = drawResultBadge(ctx, module, ml, color);
   ctx.font = font(FONT_SIZE_LABEL);
   ctx.fillStyle = COLORS.text;
-  ctx.textAlign = "center";
+  ctx.textAlign = "left";
   ctx.textBaseline = "middle";
-  const title = `${module.id} · ${module.resultType} · ${module.processTime}s · 용량 ${module.capacity}`;
-  const headerCenter = rectCenter(ml.header);
-  ctx.fillText(title, headerCenter.x, headerCenter.y, ml.header.w);
+  const title = `${module.id} · ${module.processTime}s · 용량 ${module.capacity}`;
+  const titleX = badgeRight + BADGE_PADDING_X;
+  const titleW = Math.max(0, ml.header.x + ml.header.w - BADGE_PADDING_X - titleX);
+  if (titleW > 0) ctx.fillText(title, titleX, ml.header.y + ml.header.h / 2, titleW);
 
   // 슬롯: 용량만큼 빈 자리를 그리고, 차 있는 자리에는 작업을 그린다.
   const filled = new Set<number>();
@@ -276,7 +374,7 @@ function drawQueue(
   ctx.textAlign = "right";
   ctx.textBaseline = "middle";
   const label = hidden > 0 ? `+${hidden} · 대기 ${module.queue.length}` : `대기 ${module.queue.length}`;
-  ctx.fillText(label, ml.queueArea.x + ml.queueArea.w, ml.queueArea.y + ml.queueArea.h / 2);
+  ctx.fillText(label, ml.queueArea.x + ml.queueArea.w, queueJobCenter(ml, 0).y);
 }
 
 function drawPool(ctx: Ctx, world: WorldState, layout: Layout, info: RenderInfo, overlay: RenderOverlay): void {
@@ -284,8 +382,9 @@ function drawPool(ctx: Ctx, world: WorldState, layout: Layout, info: RenderInfo,
   ctx.fillStyle = COLORS.poolFill;
   ctx.fill();
   const drag = overlay.drag;
-  const poolDroppable = drag !== null && drag.pool.sends && drag.pool.ok;
-  const poolHovered = drag !== null && drag.target.kind === "pool";
+  const dragging = drag !== null && drag.mode === "drag";
+  const poolDroppable = dragging && drag.pool.sends && drag.pool.ok;
+  const poolHovered = dragging && drag.target.kind === "pool";
   ctx.strokeStyle = poolDroppable ? COLORS.dropPool : COLORS.poolBorder;
   ctx.lineWidth = poolDroppable && poolHovered ? DROP_HOVER_WIDTH : poolDroppable ? DROP_HIGHLIGHT_WIDTH : MODULE_BORDER_WIDTH;
   ctx.stroke();
@@ -298,6 +397,7 @@ function drawPool(ctx: Ctx, world: WorldState, layout: Layout, info: RenderInfo,
   const hidden = Math.max(0, total - poolCapacity(layout));
   const title = hidden > 0 ? `대기 구역 ${total} (+${hidden} 숨김)` : `대기 구역 ${total}`;
   ctx.fillText(title, layout.poolContent.x, layout.pool.y + POOL_TITLE_HEIGHT / 2);
+  drawLegend(ctx, layout, info, layout.poolContent.x + ctx.measureText(title).width + GAP);
 
   for (const p of poolPlacements(world, layout)) drawPlacedJob(ctx, world, p, info, overlay);
 }
@@ -305,6 +405,45 @@ function drawPool(ctx: Ctx, world: WorldState, layout: Layout, info: RenderInfo,
 /** 이동 중인 작업 */
 function drawMovingJobs(ctx: Ctx, world: WorldState, layout: Layout, info: RenderInfo, overlay: RenderOverlay): void {
   for (const p of movingPlacements(world, layout)) drawPlacedJob(ctx, world, p, info, overlay);
+}
+
+/**
+ * 범례: 대기 구역 제목 줄 오른쪽 끝에 결과 종류 → 색·라벨과 "채움=얻음, 옅은 칸=남음" 설명을 작게 쓴다.
+ * 자리가 모자라면 설명을 빼고, 그래도 모자라면 그리지 않는다. minX는 제목 글자의 오른쪽 끝.
+ */
+function drawLegend(ctx: Ctx, layout: Layout, info: RenderInfo, minX: number): void {
+  const items = legendItems(info.colors);
+  if (items.length === 0) return;
+  const y = layout.pool.y + POOL_TITLE_HEIGHT / 2;
+  ctx.font = font(LEGEND_FONT_SIZE, FONT_WEIGHT_BOLD);
+  const widths = items.map((it) => Math.max(LEGEND_SWATCH, ctx.measureText(it.label).width + 2 * BADGE_INSET));
+  const itemsW = widths.reduce((a, w) => a + w, 0) + LEGEND_ITEM_GAP * (items.length - 1);
+  ctx.font = font(LEGEND_FONT_SIZE);
+  const noteW = ctx.measureText(LEGEND_NOTE).width + LEGEND_ITEM_GAP;
+  const right = layout.poolContent.x + layout.poolContent.w;
+  const showNote = right - itemsW - noteW >= minX;
+  if (!showNote && right - itemsW < minX) return;
+  let x = right - itemsW - (showNote ? noteW : 0);
+  if (showNote) {
+    ctx.fillStyle = COLORS.textDim;
+    ctx.textAlign = "left";
+    ctx.textBaseline = "middle";
+    ctx.fillText(LEGEND_NOTE, x, y);
+    x += noteW;
+  }
+  items.forEach((it, i) => {
+    const w = widths[i];
+    const r: Rect = { x, y: y - LEGEND_SWATCH / 2, w, h: LEGEND_SWATCH };
+    roundRect(ctx, r, BADGE_INSET);
+    ctx.fillStyle = it.color;
+    ctx.fill();
+    ctx.font = font(LEGEND_FONT_SIZE, FONT_WEIGHT_BOLD);
+    ctx.fillStyle = COLORS.badgeText;
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.fillText(it.label, x + w / 2, y, w);
+    x += w + LEGEND_ITEM_GAP;
+  });
 }
 
 function drawHud(ctx: Ctx, world: WorldState, layout: Layout, info: RenderInfo): void {
@@ -333,6 +472,8 @@ function toneColor(tone: TooltipLine["tone"]): string {
       return COLORS.tooltipWarn;
     case "blocked":
       return COLORS.tooltipBlocked;
+    case "accent":
+      return COLORS.tooltipAccent;
   }
 }
 
@@ -342,20 +483,28 @@ function drawDragged(ctx: Ctx, world: WorldState, layout: Layout, info: RenderIn
   if (!job) return;
   ctx.save();
   ctx.globalAlpha = DRAG_JOB_ALPHA;
-  drawJob(ctx, job, drag.pointer, POOL_JOB_RADIUS, info.colors);
+  drawJob(ctx, world, job.id, drag.pointer, POOL_JOB_RADIUS, info.colors);
   ctx.restore();
+  drawTooltip(ctx, layout, drag.pointer, drag.tooltip.slice(0, TOOLTIP_MAX_LINES));
+}
 
-  const lines = drag.tooltip.slice(0, TOOLTIP_MAX_LINES);
+/** hover 툴팁: 작업 id, 필요·얻은·남은 결과, 상태, 경과 시간 (글자는 jobLabel.jobTooltipLines) */
+function drawHover(ctx: Ctx, world: WorldState, layout: Layout, info: RenderInfo, drag: DragView): void {
+  drawTooltip(ctx, layout, drag.pointer, jobTooltipLines(world, drag.jobId, info.colors).slice(0, HOVER_TOOLTIP_MAX_LINES));
+}
+
+/** 포인터 옆 툴팁 상자 */
+function drawTooltip(ctx: Ctx, layout: Layout, pointer: Point, lines: readonly TooltipLine[]): void {
   if (lines.length === 0) return;
   ctx.font = font(FONT_SIZE_LABEL);
   const textW = Math.max(...lines.map((l) => ctx.measureText(l.text).width));
   const w = textW + 2 * TOOLTIP_PADDING;
   const h = lines.length * TOOLTIP_LINE_HEIGHT + 2 * TOOLTIP_PADDING;
   // 포인터 오른쪽 아래에 두고, 화면 밖으로 나가면 반대쪽으로 넘긴다.
-  let x = drag.pointer.x + TOOLTIP_OFFSET;
-  let y = drag.pointer.y + TOOLTIP_OFFSET;
-  if (x + w > layout.viewport.width) x = Math.max(0, drag.pointer.x - TOOLTIP_OFFSET - w);
-  if (y + h > layout.viewport.height) y = Math.max(0, drag.pointer.y - TOOLTIP_OFFSET - h);
+  let x = pointer.x + TOOLTIP_OFFSET;
+  let y = pointer.y + TOOLTIP_OFFSET;
+  if (x + w > layout.viewport.width) x = Math.max(0, pointer.x - TOOLTIP_OFFSET - w);
+  if (y + h > layout.viewport.height) y = Math.max(0, pointer.y - TOOLTIP_OFFSET - h);
   ctx.save();
   ctx.globalAlpha = TOOLTIP_ALPHA;
   ctx.fillStyle = COLORS.tooltipFill;
@@ -418,5 +567,6 @@ export function render(
   }
   drawMovingJobs(ctx, world, layout, info, overlay);
   drawToasts(ctx, layout, overlay);
-  if (overlay.drag) drawDragged(ctx, world, layout, info, overlay.drag);
+  if (overlay.drag?.mode === "drag") drawDragged(ctx, world, layout, info, overlay.drag);
+  else if (overlay.drag?.mode === "hover") drawHover(ctx, world, layout, info, overlay.drag);
 }

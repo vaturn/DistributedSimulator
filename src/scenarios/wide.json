@@ -24,7 +24,7 @@
   },
   "config": {
     "moveTime": 0.5,
-    "occupyWhenDone": true,
+    "occupyWhenDone": false,
     "cancelOnMove": true,
     "endCondition": { "kind": "time", "value": 300 }
   }

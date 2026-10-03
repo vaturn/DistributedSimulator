@@ -31,7 +31,7 @@ SEED_ARG := $(if $(SEED),--seed $(SEED),)
 # make sim은 OUT을 명령줄(또는 환경변수)로 줬을 때만 결과 JSON을 저장한다.
 SIM_OUT_ARG := $(if $(filter command line environment,$(origin OUT)),--out $(OUT),)
 
-.PHONY: help setup dev build preview test test-watch typecheck check sim compare replay clean distclean git-status commit push ship sync
+.PHONY: help setup dev build preview test test-watch typecheck check sim compare replay rules clean distclean git-status commit push ship sync
 
 help: ## 사용 가능한 타깃 목록
 	@echo "사용법: make <타깃> [변수=값]"
@@ -83,6 +83,9 @@ compare: node_modules ## 여러 정책을 같은 조건으로 비교 (SCENARIO, 
 replay: node_modules ## 결과 JSON의 명령 로그를 재생해 지표 일치 확인 (FILE 필수)
 	@if [ -z "$(FILE)" ]; then echo "오류: FILE이 필요합니다. 예: make replay FILE=out/basic-greedy-42.json" >&2; exit 1; fi
 	$(NPM) run sim -- --replay $(FILE)
+
+rules: node_modules ## 감독관 정책 목록(내장 + rules/의 룰)과 룰 로드 오류 출력
+	$(NPM) run sim -- --list
 
 clean: ## 빌드 산출물과 실행 결과 삭제
 	rm -rf dist $(OUT)

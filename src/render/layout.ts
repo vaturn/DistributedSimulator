@@ -21,6 +21,7 @@ import {
   PROGRESS_RING_WIDTH,
   QUEUE_AREA_HEIGHT,
   QUEUE_JOB_RADIUS,
+  QUEUE_TOP_PADDING,
 } from "./theme";
 
 export interface Point {
@@ -196,12 +197,12 @@ export function queueCapacity(ml: ModuleLayout): number {
   return Math.max(0, Math.floor((ml.queueArea.w + JOB_SPACING) / pitch));
 }
 
-/** 대기열 index번째(앞이 0) 작업 원의 중심 */
+/** 대기열 index번째(앞이 0) 작업 원의 중심. 원 아래에 남은 결과 라벨 자리를 남기려고 위쪽에 붙인다. */
 export function queueJobCenter(ml: ModuleLayout, index: number): Point {
   const pitch = 2 * QUEUE_JOB_RADIUS + JOB_SPACING;
   return {
     x: ml.queueArea.x + QUEUE_JOB_RADIUS + index * pitch,
-    y: ml.queueArea.y + ml.queueArea.h / 2,
+    y: ml.queueArea.y + QUEUE_TOP_PADDING + QUEUE_JOB_RADIUS,
   };
 }
 

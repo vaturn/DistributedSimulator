@@ -32,6 +32,7 @@
 | 화면 없이 실행 | `make sim SCENARIO=basic POLICY=greedy SEED=42` |
 | 정책 비교 | `make compare SCENARIO=basic POLICIES=random,greedy SEED=42` |
 | 리플레이 | `make replay FILE=out/basic-greedy-42.json` |
+| 감독관 룰 목록·로드 오류 (`rules/`) | `make rules` |
 | 정리 | `make clean` / `make distclean` |
 | git 상태 확인 | `make git-status` |
 | 커밋 / 푸시 | `make commit MSG="..."` / `make push` / `make ship MSG="..."` |
@@ -49,7 +50,7 @@ Makefile은 아래 npm scripts를 호출한다. `package.json`(M0에서 생성)�
 | `test` | `vitest run` |
 | `test:watch` | `vitest` |
 | `typecheck` | `tsc --noEmit` |
-| `sim` | `tsx src/cli/run.ts` (화면 없이 실행. 인자: `--scenario`, `--policy`, `--seed`, `--compare`, `--replay`, `--out`) |
+| `sim` | `tsx src/cli/run.ts` (화면 없이 실행. 인자: `--scenario`, `--policy`, `--seed`, `--compare`, `--replay`, `--out`, `--list`) |
 
 `sim`과 `compare`는 CLI(`src/cli/run.ts`)가 생기는 M5~M6 전까지 동작하지 않는 것이 정상이다.
 
@@ -70,7 +71,7 @@ git 작업(커밋, 푸시, 동기화) 전에 반드시 `docs/GIT.md`를 읽고 �
 2. **상태는 Command로만 바꾼다.** UI 드래그도 정책도 `Command`를 만들어 엔진에 넘긴다. 렌더러는 상태를 읽기만 한다.
 3. **결정성을 지킨다.** 같은 시나리오, 시드, 명령 로그는 항상 같은 결과를 내야 한다.
 4. **`step()` 순서**(기획서 §6)를 바꾸지 않는다.
-5. 의존 방향: `render/ui → engine`, `supervisor → engine`, `engine → (없음)`. 엔진이 다른 계층을 import하면 안 된다.
+5. 의존 방향: `render/ui → engine`, `supervisor → engine`, `rules → supervisor/rule API, engine`, `engine → (없음)`. 엔진이 다른 계층을 import하면 안 된다. 룰(`rules/*.ts`)은 상태를 바꾸지 않고 `src/supervisor/rule`의 API로만 명령을 요청한다.
 
 ## 시뮬레이션 규칙 추상화 (위반 금지)
 

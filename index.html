@@ -84,6 +84,35 @@
       .metrics-modules th, .metrics-modules td { padding: 3px 4px; text-align: right; border-bottom: 1px solid var(--panel-border); }
       .metrics-modules th:first-child { text-align: left; }
       .metrics-modules thead th { color: var(--text-dim); font-weight: normal; font-size: var(--font-size-small); cursor: help; }
+      /* 모듈 편집(시나리오 편집) 패널 */
+      .editor { border-top: 1px solid var(--panel-border); padding-top: var(--gap); }
+      .editor-summary { cursor: pointer; margin: 0; }
+      .editor-form { display: flex; flex-direction: column; gap: 8px; margin-top: 8px; }
+      .editor-section { border: 1px solid var(--panel-border); border-radius: var(--radius); padding: 6px 8px 8px; margin: 0; min-width: 0; }
+      .editor-section > .panel-subtitle { margin: 0; padding: 0 4px; }
+      .editor-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(80px, 1fr)); gap: 6px; }
+      .editor-field { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+      .editor-label { color: var(--text-dim); font-size: var(--font-size-small); }
+      .editor-check { display: flex; gap: 6px; align-items: center; color: var(--text-dim); font-size: var(--font-size-small); margin: 4px 0; }
+      .editor-input {
+        font: inherit; font-size: var(--font-size-small); color: var(--text); background: var(--btn-bg);
+        border: 1px solid var(--btn-border); border-radius: var(--radius); padding: 3px 5px; width: 100%; min-width: 0;
+      }
+      .editor-input:disabled { opacity: 0.4; }
+      .editor-textarea { resize: vertical; font-family: ui-monospace, monospace; }
+      .editor-invalid { border-color: var(--ended); }
+      .editor-field-error { color: var(--ended); font-size: var(--font-size-small); }
+      .editor-field-error:empty { display: none; }
+      .editor-modules { width: 100%; border-collapse: collapse; table-layout: fixed; margin-bottom: 6px; }
+      .editor-modules th { color: var(--text-dim); font-weight: normal; font-size: var(--font-size-small); text-align: left; padding: 2px; }
+      .editor-modules td { padding: 2px; vertical-align: top; }
+      .editor-modules th:last-child, .editor-modules td:last-child { width: 2.2em; }
+      .editor-remove { padding: 2px 6px; }
+      .editor-errors { color: var(--ended); font-size: var(--font-size-small); margin: 8px 0 0; padding-left: 1.2em; }
+      .editor-errors:empty { display: none; }
+      .editor-actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-top: 8px; }
+      .editor-load { text-align: center; }
+      .editor-load:focus-visible { outline: 2px solid var(--btn-primary); }
       /* 좁은 화면: 캔버스 위, 패널 아래로 쌓는다 */
       @media (max-width: 760px) {
         body {
@@ -105,6 +134,7 @@
       <section id="session-controls" aria-label="감독관·시나리오 선택, 결과 내보내기와 리플레이"></section>
       <p class="shortcuts"><kbd>Space</kbd> 재생/정지 · <kbd>→</kbd> 한 단계 · <kbd>R</kbd> 리셋</p>
       <section id="metrics" aria-label="지표"></section>
+      <section id="scenario-editor" aria-label="모듈 편집(시나리오 편집)"></section>
     </aside>
     <script type="module" src="/src/main.ts"></script>
   </body>

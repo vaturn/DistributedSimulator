@@ -4,7 +4,7 @@ import type { Command, Scenario } from "../src/engine/types";
 import { canAssign, defaultRules } from "../src/engine/rules";
 import type { RuleSet } from "../src/engine/rules";
 import { createRng } from "../src/engine/rng";
-import { apply, createWorld, isEnded, step } from "../src/engine/world";
+import { DEFAULT_CONFIG, apply, createWorld, isEnded, step } from "../src/engine/world";
 import {
   EPS,
   TIME_DIGITS,
@@ -650,6 +650,75 @@ describe.each(RULE_SETS)("엔진 (%s)", (_name, rules) => {
       expect(hasEvent(world.events, "processStarted", "J2")).toBe(true);
 
       stepUntil(world, (w) => job(w, "J2").state === "COMPLETED", 10);
+    });
+  });
+
+  describe("§11-4 occupyWhenDone = false (기본값): 자동 복귀", () => {
+    it("기본 설정은 occupyWhenDone=false다", () => {
+      expect(DEFAULT_CONFIG.occupyWhenDone).toBe(false);
+      const scenario = makeScenario({ modules: [{ id: MA, resultType: RA, processTime: 1 }], initial: [[RA]] });
+      delete scenario.config?.occupyWhenDone;
+      expect(make(scenario).config.occupyWhenDone).toBe(false);
+    });
+
+    it("완료되지 않은 작업은 처리가 끝난 step에 슬롯을 비우고 대기 구역으로 돌아가며, 대기열 다음 작업은 다음 step에 시작한다", () => {
+      const scenario = makeScenario({
+        modules: [{ id: MA, resultType: RA, processTime: 0.5, capacity: 1 }],
+        // J1은 결과 하나로 완료되지 않는다. J2는 완료된다.
+        initial: [[RA, RB], [RA]],
+        config: { dt: 0.1 },
+      });
+      // 기본값 동작을 검증하도록 테스트 기본 설정의 occupyWhenDone을 지운다.
+      delete scenario.config?.occupyWhenDone;
+      const world = make(scenario);
+      step(world, [assign("J1", MA), assign("J2", MA)]);
+      expect(job(world, "J2").state).toBe("QUEUED");
+      stepUntil(world, (w) => hasEvent(w.events, "processFinished", "J1"), 10);
+
+      // 같은 step 안에서: 결과를 가진 채 대기 구역으로, 슬롯은 비고, jobReturned 이벤트
+      const finished = findEvent(world.events, "processFinished", "J1");
+      const returned = findEvent(world.events, "jobReturned", "J1");
+      expect(returned).toEqual({ type: "jobReturned", jobId: "J1", moduleId: MA, t: finished.t });
+      expect(returned.t).toBeCloseTo(0.5, TIME_DIGITS);
+      expect(world.simTime).toBeCloseTo(returned.t, TIME_DIGITS);
+      expect(job(world, "J1").state).toBe("POOL");
+      expect(job(world, "J1").location).toEqual({ kind: "pool" });
+      expect(job(world, "J1").progress).toBe(0);
+      expect(job(world, "J1").acquired.has(RA)).toBe(true);
+      expect(mod(world, MA).slots).toEqual([]);
+      // §6 순서: 슬롯은 6단계에서 비므로 대기열 작업은 이번 step에는 시작하지 않는다
+      expect(hasEvent(world.events, "processStarted", "J2")).toBe(false);
+      expect(job(world, "J2").state).toBe("QUEUED");
+
+      // 다음 step 4단계에서 대기열 → 빈 슬롯
+      step(world, []);
+      const started = findEvent(world.events, "processStarted", "J2");
+      expect(started.t).toBeCloseTo(returned.t, TIME_DIGITS);
+      expect(mod(world, MA).slots).toEqual(["J2"]);
+      expect(job(world, "J2").state).toBe("PROCESSING");
+
+      // 완료되는 작업은 기존대로 COMPLETED이고 jobReturned를 내지 않는다
+      const events = flatEvents(runSteps(world, 10));
+      expect(job(world, "J2").state).toBe("COMPLETED");
+      expect(hasEvent(events, "jobCompleted", "J2")).toBe(true);
+      expect(hasEvent(events, "jobReturned", "J2")).toBe(false);
+      expect(mod(world, MA).slots).toEqual([]);
+      // J1은 감독관이 옮기기 전까지 대기 구역에 머문다
+      expect(job(world, "J1").state).toBe("POOL");
+    });
+
+    it("occupyWhenDone=true이면 jobReturned가 생기지 않는다", () => {
+      const world = make(
+        makeScenario({
+          modules: [{ id: MA, resultType: RA, processTime: 0.5 }],
+          initial: [[RA, RB]],
+          config: { dt: 0.1, occupyWhenDone: true },
+        }),
+      );
+      const events = flatEvents(runSteps(world, 20, { 0: [assign("J1", MA)] }));
+      expect(hasEvent(events, "processFinished", "J1")).toBe(true);
+      expect(hasEvent(events, "jobReturned")).toBe(false);
+      expect(job(world, "J1").state).toBe("DONE_AT_MODULE");
     });
   });
 

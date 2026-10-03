@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   computeLayout,
+  queueJobCenter,
   rectInside,
   rectsOverlap,
   slotCenter,
@@ -8,6 +9,13 @@ import {
   type ModuleShape,
   type Rect,
 } from "../src/render/layout";
+import {
+  FONT_SIZE_SMALL,
+  POOL_JOB_RADIUS,
+  QUEUE_JOB_RADIUS,
+  SLICE_LABEL_MIN_RADIUS,
+  SMALL_CAPTION_GAP,
+} from "../src/render/theme";
 
 const VIEWPORT = { width: 960, height: 600 };
 
@@ -79,6 +87,26 @@ describe("computeLayout", () => {
       expect(rectInside(moduleFootprint(layout, a), narrow)).toBe(true);
       for (let b = a + 1; b < 7; b++) {
         expect(rectsOverlap(moduleFootprint(layout, a), moduleFootprint(layout, b))).toBe(false);
+      }
+    }
+  });
+});
+
+describe("결과 라벨 자리", () => {
+  const layout = computeLayout(VIEWPORT, shapes(3));
+
+  it("대기 구역·슬롯 작업 원은 조각 안에 결과 라벨을 쓸 만큼 크다", () => {
+    expect(POOL_JOB_RADIUS).toBeGreaterThanOrEqual(SLICE_LABEL_MIN_RADIUS);
+    for (const m of layout.modules) expect(m.jobRadius).toBeGreaterThanOrEqual(SLICE_LABEL_MIN_RADIUS);
+  });
+
+  it("대기열 작은 원과 그 아래 남은 결과 라벨이 대기열 영역 안에 들어간다", () => {
+    for (const m of layout.modules) {
+      const c = queueJobCenter(m, 0);
+      expect(c.y - QUEUE_JOB_RADIUS).toBeGreaterThanOrEqual(m.queueArea.y);
+      if (QUEUE_JOB_RADIUS < SLICE_LABEL_MIN_RADIUS) {
+        const captionBottom = c.y + QUEUE_JOB_RADIUS + SMALL_CAPTION_GAP + FONT_SIZE_SMALL;
+        expect(captionBottom).toBeLessThanOrEqual(m.queueArea.y + m.queueArea.h);
       }
     }
   });

@@ -285,7 +285,7 @@ function advanceProcessing(world: WorldState, dt: number): Map<ModuleId, number>
   return processed;
 }
 
-/** 6. 완료 판정. 완료된 작업은 슬롯에서 빼고 completedCount를 올린다. */
+/** 6. 완료 판정. 완료된 작업은 슬롯에서 빼고 completedCount를 올린다. 미완료 작업은 규칙에 따라 대기 구역으로 돌려보낸다. */
 function resolveCompletions(world: WorldState, dt: number): void {
   const t = stepEndTime(world, dt);
   for (const module of world.modules.values()) {
@@ -300,8 +300,10 @@ function resolveCompletions(world: WorldState, dt: number): void {
         world.completedCount++;
         emit(world, { type: "jobCompleted", jobId, moduleId: module.id, t });
       } else if (world.rules.releaseWhenDone(world, job, module)) {
+        // 자동 복귀: 슬롯을 비우고 대기 구역으로. 비운 슬롯은 다음 step 4단계에서 대기열이 채운다.
         removeFrom(module.slots, jobId);
         sendToPool(job);
+        emit(world, { type: "jobReturned", jobId, moduleId: module.id, t });
       }
     }
   }

@@ -46,6 +46,18 @@ describe("random 정책", () => {
     expect(all.flat().length).toBeGreaterThan(0);
   });
 
+  it("basic(occupyWhenDone=false)에서 작업을 완료하고 처리 끝난 작업을 모듈에 남기지 않는다", () => {
+    const scenario = basicScenario();
+    expect(scenario.config?.occupyWhenDone).toBe(false);
+    const world = createWorld(scenario);
+    const sup = createRandomSupervisor(42);
+    for (let i = 0; i < 3000; i++) {
+      step(world, sup.decide(world));
+      for (const j of world.jobs.values()) expect(j.state).not.toBe("DONE_AT_MODULE");
+    }
+    expect(world.completedCount).toBeGreaterThan(0);
+  });
+
   it("view를 바꾸지 않는다", () => {
     const world = createWorld(basicScenario());
     const before = JSON.stringify([...world.jobs.values()].map((j) => [j.id, j.state, [...j.acquired]]));

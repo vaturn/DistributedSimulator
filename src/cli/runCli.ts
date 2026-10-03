@@ -7,9 +7,10 @@ import { runHeadless } from "../engine/runner";
 import { parseScenario } from "../engine/scenario";
 import type { Metrics, Scenario } from "../engine/types";
 import { SCENARIOS, findScenario } from "../scenarios";
-import { POLICIES, type PolicyEntry, findPolicy } from "../supervisor/registry";
+import { type PolicyEntry, type PolicyRegistry, createRegistry } from "../supervisor/registry";
+import type { LoadedRules } from "../supervisor/ruleLoader";
 import { type CliOptions, USAGE } from "./args";
-import { formatCompareTable, formatMetricsTable } from "./format";
+import { formatCompareTable, formatMetricsTable, formatRows } from "./format";
 
 /** 종료 코드 */
 export const EXIT_OK = 0;
@@ -47,6 +48,25 @@ const JSON_INDENT = 2;
 /** --replay와 함께 쓸 수 없는 옵션 */
 const REPLAY_EXCLUSIVE = ["scenario", "policy", "seed", "compare", "out"] as const;
 
+/** --list와 함께 쓸 수 없는 옵션 */
+const LIST_EXCLUSIVE = ["scenario", "policy", "seed", "compare", "replay", "out"] as const;
+
+/** CLI가 쓰는 정책 목록과 룰 로드 오류 */
+export interface CliPolicies {
+  registry: PolicyRegistry;
+  /** 불러오지 못한 룰과 이유 (파일 import 실패, 형식 오류, 이름 충돌) */
+  errors: readonly string[];
+}
+
+/**
+ * 룰 로드 결과로 CLI 정책 목록을 만든다.
+ * importErrors: 파일을 import하지 못한 오류 (모듈 수집은 진입점 run.ts가 node로 한다)
+ */
+export function cliPolicies(loaded?: Readonly<LoadedRules>, importErrors: readonly string[] = []): CliPolicies {
+  const registry = createRegistry(loaded?.entries ?? []);
+  return { registry, errors: [...importErrors, ...(loaded?.errors ?? []), ...registry.errors] };
+}
+
 /** 시나리오 인자가 이름이 아니라 파일 경로인지 */
 export function isScenarioPath(arg: string): boolean {
   return arg.endsWith(".json") || arg.includes("/") || arg.includes("\\");
@@ -71,8 +91,13 @@ function scenarioList(): string {
   return SCENARIOS.map((s) => s.name).join(", ");
 }
 
-function policyList(): string {
-  return POLICIES.map((p) => p.name).join(", ");
+function policyList(policies: CliPolicies): string {
+  return policies.registry.policies.map((p) => p.name).join(", ");
+}
+
+/** 룰 로드 오류를 경고로 알린다 (실행은 계속한다) */
+function warnRuleErrors(policies: CliPolicies, io: CliIo): void {
+  for (const e of policies.errors) io.stderr(`경고: 룰을 불러오지 못했습니다: ${e}`);
 }
 
 /** 시나리오 인자를 Scenario로 바꾼다. 실패하면 오류 메시지 */
@@ -147,18 +172,18 @@ function requireScenario(options: Readonly<CliOptions>, io: CliIo): Scenario | n
 }
 
 /** 정책 하나 실행 (--policy) */
-function runSingle(options: Readonly<CliOptions>, io: CliIo): number {
+function runSingle(options: Readonly<CliOptions>, io: CliIo, policies: CliPolicies): number {
   if (options.scenario === undefined) {
     io.stderr(`오류: --scenario가 필요합니다.\n사용 가능한 시나리오: ${scenarioList()}`);
     return EXIT_ERROR;
   }
   if (options.policy === undefined) {
-    io.stderr(`오류: --policy가 필요합니다.\n사용 가능한 정책: ${policyList()}`);
+    io.stderr(`오류: --policy가 필요합니다.\n사용 가능한 정책: ${policyList(policies)}`);
     return EXIT_ERROR;
   }
-  const policy = findPolicy(options.policy);
+  const policy = policies.registry.find(options.policy);
   if (!policy) {
-    io.stderr(`오류: 정책을 찾을 수 없습니다: ${options.policy}\n사용 가능한 정책: ${policyList()}`);
+    io.stderr(`오류: 정책을 찾을 수 없습니다: ${options.policy}\n사용 가능한 정책: ${policyList(policies)}`);
     return EXIT_ERROR;
   }
   const scenario = requireScenario(options, io);
@@ -177,7 +202,8 @@ function runSingle(options: Readonly<CliOptions>, io: CliIo): number {
 }
 
 /** 여러 정책 비교 (--compare). 정책을 모두 확인한 뒤에 실행한다. */
-function runCompare(names: readonly string[], options: Readonly<CliOptions>, io: CliIo): number {
+function runCompare(names: readonly string[], options: Readonly<CliOptions>, io: CliIo, policies: CliPolicies): number {
+  const find = (name: string): PolicyEntry | undefined => policies.registry.find(name);
   if (options.policy !== undefined) {
     io.stderr("오류: --compare와 --policy는 함께 쓸 수 없습니다.");
     return EXIT_UNSUPPORTED;
@@ -187,17 +213,17 @@ function runCompare(names: readonly string[], options: Readonly<CliOptions>, io:
     io.stderr(`오류: --compare에 같은 정책이 두 번 있습니다: ${[...new Set(duplicated)].join(", ")}`);
     return EXIT_ERROR;
   }
-  const missing = names.filter((n) => !findPolicy(n));
+  const missing = names.filter((n) => !find(n));
   if (missing.length > 0) {
-    io.stderr(`오류: 정책을 찾을 수 없습니다: ${missing.join(", ")}\n사용 가능한 정책: ${policyList()}`);
+    io.stderr(`오류: 정책을 찾을 수 없습니다: ${missing.join(", ")}\n사용 가능한 정책: ${policyList(policies)}`);
     return EXIT_ERROR;
   }
-  const policies = names.map((n) => findPolicy(n)).filter((p): p is PolicyEntry => p !== undefined);
+  const selected = names.map(find).filter((p): p is PolicyEntry => p !== undefined);
   const scenario = requireScenario(options, io);
   if (!scenario) return EXIT_ERROR;
   const seed = options.seed ?? scenario.seed;
 
-  const runs = policies.map((p) => runPolicy(scenario, p, seed));
+  const runs = selected.map((p) => runPolicy(scenario, p, seed));
   io.stdout(formatCompareTable(runs, { scenario: scenario.name, seed }));
 
   if (options.out !== undefined) {
@@ -259,13 +285,34 @@ function runReplay(file: string, options: Readonly<CliOptions>, io: CliIo): numb
   return EXIT_ERROR;
 }
 
-/** CLI를 실행하고 종료 코드를 돌려준다. */
-export function runCli(options: Readonly<CliOptions>, io: CliIo): number {
+/** 정책 목록과 룰 로드 오류 출력 (--list). 오류가 있으면 EXIT_ERROR */
+function runList(options: Readonly<CliOptions>, io: CliIo, policies: CliPolicies): number {
+  const conflicts = LIST_EXCLUSIVE.filter((k) => options[k] !== undefined);
+  if (conflicts.length > 0) {
+    io.stderr(`오류: --list는 ${conflicts.map((k) => `--${k}`).join(", ")}와 함께 쓸 수 없습니다.`);
+    return EXIT_UNSUPPORTED;
+  }
+  const rows = [["이름", "표시 이름", "파일"], ...policies.registry.policies.map((p) => [p.name, p.label, p.source ?? "-"])];
+  io.stdout(`정책 ${policies.registry.policies.length}개`);
+  io.stdout(formatRows(rows).join("\n"));
+  if (policies.errors.length === 0) return EXIT_OK;
+  io.stderr(`\n룰 로드 오류 ${policies.errors.length}건:`);
+  for (const e of policies.errors) io.stderr(`  ${e}`);
+  return EXIT_ERROR;
+}
+
+/**
+ * CLI를 실행하고 종료 코드를 돌려준다.
+ * policies: 정책 목록. 생략하면 내장 정책만 쓴다(rules/ 폴더 수집은 진입점 run.ts가 해서 넘긴다).
+ */
+export function runCli(options: Readonly<CliOptions>, io: CliIo, policies: CliPolicies = cliPolicies()): number {
   if (options.help) {
     io.stdout(USAGE);
     return EXIT_OK;
   }
+  if (options.list) return runList(options, io, policies);
   if (options.replay !== undefined) return runReplay(options.replay, options, io);
-  if (options.compare !== undefined) return runCompare(options.compare, options, io);
-  return runSingle(options, io);
+  warnRuleErrors(policies, io);
+  if (options.compare !== undefined) return runCompare(options.compare, options, io, policies);
+  return runSingle(options, io, policies);
 }

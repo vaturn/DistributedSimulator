@@ -25,7 +25,8 @@ export interface ExportMeta {
   scenarioSpec: Scenario;
 }
 
-function safePart(s: string): string {
+/** 파일명에 쓸 수 없는 문자를 바꾼다 (시나리오 JSON 저장도 같은 규칙을 쓴다) */
+export function safePart(s: string): string {
   return s.replace(UNSAFE_FILENAME_CHARS, UNSAFE_REPLACEMENT);
 }
 
@@ -41,7 +42,7 @@ export function runResultJson(world: WorldState, meta: ExportMeta, commandLog: r
 }
 
 /** 문자열을 파일로 내려받게 한다. */
-function download(fileName: string, text: string): void {
+export function download(fileName: string, text: string): void {
   const url = URL.createObjectURL(new Blob([text], { type: JSON_MIME }));
   const a = document.createElement("a");
   a.href = url;

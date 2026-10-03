@@ -1,4 +1,4 @@
-// 드래그 앤 드롭 입력 → 수동 감독관 명령 (기획서 §7 조작).
+// 드래그 앤 드롭 입력 → 수동 감독관 명령 (기획서 §7 조작), 그리고 작업 hover(툴팁·유용 모듈 강조).
 // 히트 판정·드롭 변환·강조 판정은 순수 함수로 두어 테스트할 수 있게 한다.
 // 상태는 직접 바꾸지 않고 manual 감독관의 submit으로 Command만 넘긴다.
 // 배치 가능 여부·경고 판정은 engine/rules.ts의 assignHint/canUnassign만 쓴다.
@@ -84,10 +84,18 @@ export interface ModuleDropHint {
   level: HintLevel;
 }
 
-/** 툴팁 한 줄 */
+/** 툴팁 한 줄. accent는 남은 결과처럼 눈에 띄게 할 정보 */
 export interface TooltipLine {
   text: string;
-  tone: "info" | "warn" | "blocked";
+  tone: "info" | "warn" | "blocked" | "accent";
+}
+
+/** 포인터 표시 방식: 드래그 중(drag) 또는 마우스를 올려 둠(hover, 드래그 아님) */
+export type PointerMode = "drag" | "hover";
+
+/** 포인터 위치와 표시 방식. mode가 없으면 drag로 본다. */
+export interface TrackedPointer extends Point {
+  mode?: PointerMode;
 }
 
 /** 대기 구역에 놓을 때의 판정 */
@@ -99,13 +107,16 @@ export interface PoolDropHint {
   reason?: string;
 }
 
-/** 렌더러에 넘기는 드래그 표시 정보 */
+/** 렌더러에 넘기는 드래그(또는 hover) 표시 정보 */
 export interface DragView {
+  /** drag: 드롭 대상 강조·드롭 툴팁. hover: 작업 정보 툴팁·남은 결과를 주는 모듈 은은한 강조 */
+  mode: PointerMode;
   jobId: JobId;
   pointer: Point;
   target: DropTarget;
   moduleHints: ReadonlyMap<ModuleId, ModuleDropHint>;
   pool: PoolDropHint;
+  /** 드롭 툴팁 (hover이면 비어 있다. 작업 정보 툴팁은 렌더러가 jobLabel.jobTooltipLines로 만든다) */
   tooltip: TooltipLine[];
 }
 
@@ -137,12 +148,15 @@ function tooltipFor(target: DropTarget, hints: ReadonlyMap<ModuleId, ModuleDropH
   }
 }
 
-/** 드래그 중 표시 정보를 계산한다. 작업이 사라졌거나 완료됐으면 null */
+/**
+ * 드래그(또는 hover) 중 표시 정보를 계산한다. 작업이 사라졌거나 완료됐으면 null.
+ * pointer.mode가 "hover"면 드롭 대상은 없음으로 두고 드롭 툴팁을 만들지 않는다.
+ */
 export function computeDragView(
   world: Readonly<WorldState>,
   layout: Layout,
   jobId: JobId,
-  pointer: Point,
+  pointer: TrackedPointer,
 ): DragView | null {
   const job = world.jobs.get(jobId);
   if (!job || job.state === "COMPLETED") return null;
@@ -151,9 +165,13 @@ export function computeDragView(
     const hint = assignHint(world, jobId, moduleId);
     moduleHints.set(moduleId, { hint, level: hintLevel(hint) });
   }
-  const target = hitTestDropTarget(layout, pointer);
   const pool = poolDropHint(world, jobId);
-  return { jobId, pointer, target, moduleHints, pool, tooltip: tooltipFor(target, moduleHints, pool) };
+  const point: Point = { x: pointer.x, y: pointer.y };
+  if (pointer.mode === "hover") {
+    return { mode: "hover", jobId, pointer: point, target: { kind: "none" }, moduleHints, pool, tooltip: [] };
+  }
+  const target = hitTestDropTarget(layout, point);
+  return { mode: "drag", jobId, pointer: point, target, moduleHints, pool, tooltip: tooltipFor(target, moduleHints, pool) };
 }
 
 // ---------- 포인터 이벤트 연결 (DOM) ----------
@@ -171,14 +189,19 @@ export interface DragInputOptions {
   canvas: HTMLCanvasElement;
   getWorld(): Readonly<WorldState>;
   getLayout(): Layout;
-  supervisor: Pick<ManualSupervisor, "submit">;
+  /** 없으면 드래그는 하지 않고 hover(툴팁·강조)만 한다 (정책 감독관 관전용) */
+  supervisor?: Pick<ManualSupervisor, "submit">;
   /** 드래그 상태가 바뀌면 불린다 (다시 그리기용) */
   onChange?(): void;
 }
 
 export interface DragInput {
-  /** 지금 드래그 중이면 작업과 포인터 위치 (임계값을 넘기 전에는 null) */
-  current(): { jobId: JobId; pointer: Point } | null;
+  /**
+   * 지금 드래그 중이면 작업과 포인터 위치(mode "drag"). 드래그가 아니고 마우스가 작업 위에 있으면
+   * 그 작업과 포인터 위치(mode "hover"). 둘 다 아니면 null. 그대로 computeDragView에 넘기면 된다.
+   * hover 작업은 부를 때마다 마지막 포인터 위치로 다시 히트 판정한다 (작업이 움직여도 맞게).
+   */
+  current(): { jobId: JobId; pointer: TrackedPointer } | null;
   detach(): void;
 }
 
@@ -186,6 +209,8 @@ export interface DragInput {
 export function attachDragInput(options: DragInputOptions): DragInput {
   const { canvas } = options;
   let drag: DragState | null = null;
+  /** 마우스·펜이 캔버스 위에 있을 때 마지막 위치 (hover 판정용). 캔버스를 벗어나면 null */
+  let hoverPoint: Point | null = null;
 
   const toPoint = (e: PointerEvent): Point => {
     const r = canvas.getBoundingClientRect();
@@ -200,7 +225,7 @@ export function attachDragInput(options: DragInputOptions): DragInput {
   };
 
   const onDown = (e: PointerEvent): void => {
-    if (drag || !e.isPrimary || e.button !== 0) return;
+    if (!options.supervisor || drag || !e.isPrimary || e.button !== 0) return;
     const p = toPoint(e);
     const hit = hitTestJob(options.getLayout(), options.getWorld(), p);
     if (!hit) return;
@@ -211,9 +236,10 @@ export function attachDragInput(options: DragInputOptions): DragInput {
 
   const onMove = (e: PointerEvent): void => {
     const p = toPoint(e);
+    hoverPoint = e.pointerType === "touch" ? null : p;
     if (!drag) {
       // 잡을 수 있는 작업 위에서는 손 모양 커서
-      canvas.style.cursor = hitTestJob(options.getLayout(), options.getWorld(), p) ? "grab" : "";
+      canvas.style.cursor = options.supervisor && hitTestJob(options.getLayout(), options.getWorld(), p) ? "grab" : "";
       return;
     }
     if (e.pointerId !== drag.pointerId) return;
@@ -231,7 +257,7 @@ export function attachDragInput(options: DragInputOptions): DragInput {
     if (drag.dragging) {
       const world = options.getWorld();
       const cmd = dropToCommand(world, drag.jobId, hitTestDropTarget(options.getLayout(), p));
-      if (cmd) options.supervisor.submit(cmd);
+      if (cmd) options.supervisor?.submit(cmd);
     }
     end();
   };
@@ -243,17 +269,28 @@ export function attachDragInput(options: DragInputOptions): DragInput {
   canvas.addEventListener("pointerdown", onDown);
   canvas.addEventListener("pointermove", onMove);
   canvas.addEventListener("pointerup", onUp);
+  const onLeave = (): void => {
+    hoverPoint = null;
+    if (!drag) canvas.style.cursor = "";
+  };
+
   canvas.addEventListener("pointercancel", onCancel);
+  canvas.addEventListener("pointerleave", onLeave);
 
   return {
     current() {
-      return drag && drag.dragging ? { jobId: drag.jobId, pointer: drag.pointer } : null;
+      if (drag && drag.dragging) return { jobId: drag.jobId, pointer: { ...drag.pointer, mode: "drag" } };
+      if (!hoverPoint) return null;
+      const hit = hitTestJob(options.getLayout(), options.getWorld(), hoverPoint);
+      return hit ? { jobId: hit.jobId, pointer: { ...hoverPoint, mode: "hover" } } : null;
     },
     detach() {
       canvas.removeEventListener("pointerdown", onDown);
       canvas.removeEventListener("pointermove", onMove);
       canvas.removeEventListener("pointerup", onUp);
       canvas.removeEventListener("pointercancel", onCancel);
+      canvas.removeEventListener("pointerleave", onLeave);
+      hoverPoint = null;
       end();
     },
   };

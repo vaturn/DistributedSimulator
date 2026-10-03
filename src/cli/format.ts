@@ -131,3 +131,18 @@ export function formatCompareTable(columns: readonly CompareColumn[], info?: Rea
   for (const line of alignRows(rows)) lines.push(line);
   return lines.join("\n");
 }
+
+/** 행 목록을 모든 열 왼쪽 정렬한 줄들로 (정책 목록 등 글자 표) */
+export function formatRows(rows: readonly (readonly string[])[]): string[] {
+  const columns = Math.max(0, ...rows.map((r) => r.length));
+  const widths: number[] = [];
+  for (let c = 0; c < columns; c++) {
+    widths.push(Math.max(0, ...rows.map((r) => displayWidth(r[c] ?? ""))));
+  }
+  return rows.map((r) =>
+    r
+      .map((cell, c) => padEnd(cell, widths[c] ?? 0))
+      .join(COLUMN_GAP)
+      .trimEnd(),
+  );
+}

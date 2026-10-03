@@ -217,6 +217,13 @@ describe("지표 결정성", () => {
     return computeMetrics(world);
   }
 
+  it("basic(occupyWhenDone=false)을 greedy로 돌리면 모든 모듈의 점유 낭비가 0이다", () => {
+    const m = run();
+    expect((basic as Scenario).config?.occupyWhenDone).toBe(false);
+    expect(m.modules.length).toBeGreaterThan(0);
+    for (const mm of m.modules) expect(mm.doneOccupiedTime).toBe(0);
+  });
+
   it("같은 시나리오·시드·감독관이면 지표가 같다", () => {
     const a = run();
     const b = run();

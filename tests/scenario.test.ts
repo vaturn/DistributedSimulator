@@ -50,6 +50,10 @@ describe("내장 시나리오", () => {
     }
   });
 
+  it("내장 시나리오는 처리 끝난 작업을 자동으로 대기 구역에 돌려보낸다 (occupyWhenDone=false)", () => {
+    for (const s of SCENARIOS) expect(createWorld(s.scenario).config.occupyWhenDone).toBe(false);
+  });
+
   it("basic.json은 파싱 결과가 원본과 같다", () => {
     expect(parseScenario(basicJson)).toEqual(basicJson);
     expect(findScenario("basic")?.scenario).toEqual(basicJson);

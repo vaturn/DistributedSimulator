@@ -1,8 +1,9 @@
 // 드래그 입력의 순수 함수 테스트: 히트 판정, 드롭 대상, 드롭 → 명령, 강조 단계, 토스트
 import { describe, expect, it } from "vitest";
-import type { WorldState } from "../src/engine/types";
+import type { Command, WorldState } from "../src/engine/types";
 import { createWorld, step } from "../src/engine/world";
 import {
+  attachDragInput,
   computeDragView,
   dropToCommand,
   exceedsDragThreshold,
@@ -185,6 +186,111 @@ describe("드래그 강조 (assignHint 기반)", () => {
     const { world, layout, ids } = setup();
     job(world, ids[2]).state = "COMPLETED";
     expect(computeDragView(world, layout, ids[2], { x: 0, y: 0 })).toBeNull();
+  });
+});
+
+describe("hover 표시 (computeDragView mode hover)", () => {
+  it("hover는 드롭 대상·드롭 툴팁이 없고, 남은 결과를 주는 모듈은 hint.useful", () => {
+    const { world, layout, ids } = setup();
+    const pointer = poolJobCenter(layout, 0);
+    const view = computeDragView(world, layout, ids[2], { ...pointer, mode: "hover" });
+    expect(view?.mode).toBe("hover");
+    expect(view?.target).toEqual({ kind: "none" });
+    expect(view?.tooltip).toEqual([]);
+    expect(view?.pointer).toEqual(pointer);
+    expect(view?.moduleHints.get("P")?.hint.useful).toBe(true);
+    expect(view?.moduleHints.get("Q")?.hint.useful).toBe(false);
+  });
+
+  it("mode가 없으면 drag로 본다", () => {
+    const { world, layout, ids } = setup();
+    expect(computeDragView(world, layout, ids[2], poolJobCenter(layout, 0))?.mode).toBe("drag");
+  });
+});
+
+/** 포인터 이벤트 리스너만 흉내 내는 가짜 캔버스 (DOM 없이 attachDragInput을 돌린다) */
+function fakeCanvas() {
+  const listeners = new Map<string, (e: PointerEvent) => void>();
+  const canvas = {
+    style: { cursor: "" },
+    addEventListener(type: string, fn: (e: PointerEvent) => void) {
+      listeners.set(type, fn);
+    },
+    removeEventListener(type: string) {
+      listeners.delete(type);
+    },
+    getBoundingClientRect: () => ({ left: 0, top: 0 }),
+    setPointerCapture() {},
+    releasePointerCapture() {},
+    hasPointerCapture: () => false,
+  };
+  const fire = (type: string, p: Point, extra: Partial<PointerEvent> = {}) => {
+    const e = { clientX: p.x, clientY: p.y, pointerId: 1, isPrimary: true, button: 0, pointerType: "mouse", preventDefault() {}, ...extra };
+    listeners.get(type)?.(e as unknown as PointerEvent);
+  };
+  return { canvas: canvas as unknown as HTMLCanvasElement, fire, listeners };
+}
+
+describe("attachDragInput hover", () => {
+  it("작업 위로 마우스를 옮기면 hover, 벗어나거나 캔버스를 떠나면 null", () => {
+    const { world, layout, ids } = setup();
+    const { canvas, fire } = fakeCanvas();
+    const input = attachDragInput({ canvas, getWorld: () => world, getLayout: () => layout, supervisor: { submit() {} } });
+    const p = poolJobCenter(layout, 0);
+    fire("pointermove", p);
+    expect(input.current()).toEqual({ jobId: ids[2], pointer: { ...p, mode: "hover" } });
+    fire("pointermove", { x: 0, y: 0 });
+    expect(input.current()).toBeNull();
+    fire("pointermove", p);
+    fire("pointerleave", p);
+    expect(input.current()).toBeNull();
+    input.detach();
+  });
+
+  it("터치 이동은 hover로 보지 않는다", () => {
+    const { world, layout } = setup();
+    const { canvas, fire } = fakeCanvas();
+    const input = attachDragInput({ canvas, getWorld: () => world, getLayout: () => layout, supervisor: { submit() {} } });
+    fire("pointermove", poolJobCenter(layout, 0), { pointerType: "touch" });
+    expect(input.current()).toBeNull();
+    input.detach();
+  });
+
+  it("드래그 중에는 drag, 놓으면 명령을 보내고 다시 hover", () => {
+    const { world, layout, ids } = setup();
+    const { canvas, fire } = fakeCanvas();
+    const sent: Command[] = [];
+    const input = attachDragInput({ canvas, getWorld: () => world, getLayout: () => layout, supervisor: { submit: (c) => sent.push(c) } });
+    const start = poolJobCenter(layout, 0);
+    const target = slotCenter(moduleLayout(layout, "Q"), 0);
+    fire("pointerdown", start);
+    fire("pointermove", target);
+    expect(input.current()).toEqual({ jobId: ids[2], pointer: { ...target, mode: "drag" } });
+    fire("pointerup", target);
+    expect(sent).toEqual([{ type: "assign", jobId: ids[2], moduleId: "Q" }]);
+    // 명령은 다음 step에 적용되므로 놓은 자리(Q 슬롯)는 아직 비어 있다 → hover 대상 없음
+    expect(input.current()).toBeNull();
+    fire("pointermove", poolJobCenter(layout, 1));
+    expect(input.current()).toEqual({ jobId: ids[3], pointer: { ...poolJobCenter(layout, 1), mode: "hover" } });
+    input.detach();
+  });
+
+  it("감독관이 없으면 드래그하지 않고 hover만 한다", () => {
+    const { world, layout, ids } = setup();
+    const { canvas, fire } = fakeCanvas();
+    const input = attachDragInput({ canvas, getWorld: () => world, getLayout: () => layout });
+    const p = poolJobCenter(layout, 0);
+    fire("pointerdown", p);
+    fire("pointermove", poolJobCenter(layout, 1));
+    expect(input.current()).toEqual({ jobId: ids[3], pointer: { ...poolJobCenter(layout, 1), mode: "hover" } });
+    input.detach();
+  });
+
+  it("detach하면 리스너를 모두 뗀다", () => {
+    const { world, layout } = setup();
+    const { canvas, listeners } = fakeCanvas();
+    attachDragInput({ canvas, getWorld: () => world, getLayout: () => layout }).detach();
+    expect(listeners.size).toBe(0);
   });
 });
 
