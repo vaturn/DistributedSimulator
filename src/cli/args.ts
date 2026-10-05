@@ -1,5 +1,5 @@
 // CLI 인자 파서 (순수 함수). node API를 쓰지 않는다.
-// 지원 인자: --scenario, --policy, --seed, --compare, --replay, --out, --list, --help (`--키 값` 또는 `--키=값`)
+// 지원 인자: --scenario, --policy, --seed, --compare, --replay, --sweep, --out, --list, --help (`--키 값` 또는 `--키=값`)
 
 /** 파싱된 CLI 옵션 */
 export interface CliOptions {
@@ -13,6 +13,8 @@ export interface CliOptions {
   compare?: string[];
   /** 재생할 결과 JSON 파일 경로 (M6 리플레이) */
   replay?: string;
+  /** 실험 명세 파일 경로 (experiments/*.ts, make sweep) */
+  sweep?: string;
   /** 결과 JSON을 저장할 디렉터리 */
   out?: string;
   /** 정책 목록(내장 + rules/)과 룰 로드 오류 출력 (make rules) */
@@ -26,7 +28,7 @@ export interface ArgsError {
 }
 
 /** 값을 받는 옵션 이름 */
-const VALUE_OPTIONS = ["scenario", "policy", "seed", "compare", "replay", "out"] as const;
+const VALUE_OPTIONS = ["scenario", "policy", "seed", "compare", "replay", "sweep", "out"] as const;
 type ValueOption = (typeof VALUE_OPTIONS)[number];
 
 const INTEGER_PATTERN = /^-?\d+$/;
@@ -36,6 +38,7 @@ export const USAGE = [
   "사용법: tsx src/cli/run.ts --scenario <이름|파일.json> --policy <정책> [--seed <정수>] [--out <디렉터리>]",
   "       tsx src/cli/run.ts --scenario <이름|파일.json> --compare <a,b,...> [--seed <정수>] [--out <디렉터리>]",
   "       tsx src/cli/run.ts --replay <결과.json>",
+  "       tsx src/cli/run.ts --sweep <experiments/x.ts> [--out <디렉터리>]",
   "       tsx src/cli/run.ts --list",
   "",
   "  --scenario <이름|경로>  시나리오 이름 또는 .json 파일 경로",
@@ -45,6 +48,7 @@ export const USAGE = [
   "  --replay <결과.json>    결과 JSON의 명령 로그를 재생해 지표가 같은지 확인 (단독으로 쓴다)",
   "  --out <디렉터리>        결과 JSON 저장 위치 (<시나리오>-<정책>-<시드>.json,",
   "                          비교 요약은 <시나리오>-compare-<시드>.json)",
+  "  --sweep <명세.ts>       실험 명세의 모든 케이스·정책·시드를 실행해 집계 (--out이면 <name>.csv, <name>.md 저장)",
   "  --list                  정책 목록(내장 + rules/)과 룰 로드 오류 출력 (단독으로 쓴다)",
   "  --help                  이 도움말",
 ].join("\n");
@@ -127,6 +131,9 @@ export function parseArgs(argv: readonly string[]): CliOptions | ArgsError {
       }
       case "replay":
         options.replay = value;
+        break;
+      case "sweep":
+        options.sweep = value;
         break;
       case "out":
         options.out = value;

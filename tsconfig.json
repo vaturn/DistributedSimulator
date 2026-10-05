@@ -16,7 +16,7 @@
     "noFallthroughCasesInSwitch": true,
     "forceConsistentCasingInFileNames": true
   },
-  "include": ["src", "rules", "tests", "vite.config.ts"],
+  "include": ["src", "rules", "tests", "experiments", "vite.config.ts"],
   // node API를 쓰는 CLI 진입점은 tsconfig.cli.json에서 node 타입으로 따로 검사한다.
   "exclude": ["src/cli/run.ts"]
 }

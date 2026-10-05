@@ -11,6 +11,7 @@ import { type PolicyEntry, type PolicyRegistry, createRegistry } from "../superv
 import type { LoadedRules } from "../supervisor/ruleLoader";
 import { type CliOptions, USAGE } from "./args";
 import { formatCompareTable, formatMetricsTable, formatRows } from "./format";
+import { formatSweepCsv, formatSweepMarkdown, parseExperimentSpec, runExperiment } from "./sweep";
 
 /** 종료 코드 */
 export const EXIT_OK = 0;
@@ -46,10 +47,13 @@ const COMPARE_FILE_PART = "compare";
 /** JSON 들여쓰기 칸 수 */
 const JSON_INDENT = 2;
 /** --replay와 함께 쓸 수 없는 옵션 */
-const REPLAY_EXCLUSIVE = ["scenario", "policy", "seed", "compare", "out"] as const;
+const REPLAY_EXCLUSIVE = ["scenario", "policy", "seed", "compare", "sweep", "out"] as const;
 
 /** --list와 함께 쓸 수 없는 옵션 */
-const LIST_EXCLUSIVE = ["scenario", "policy", "seed", "compare", "replay", "out"] as const;
+const LIST_EXCLUSIVE = ["scenario", "policy", "seed", "compare", "replay", "sweep", "out"] as const;
+
+/** --sweep과 함께 쓸 수 없는 옵션 (시나리오·정책·시드는 명세가 정한다) */
+const SWEEP_EXCLUSIVE = ["scenario", "policy", "seed", "compare", "replay"] as const;
 
 /** CLI가 쓰는 정책 목록과 룰 로드 오류 */
 export interface CliPolicies {
@@ -301,11 +305,71 @@ function runList(options: Readonly<CliOptions>, io: CliIo, policies: CliPolicies
   return EXIT_ERROR;
 }
 
+/** sweep 결과 파일 경로: <out>/<name>.<ext> */
+export function sweepFilePath(out: string, name: string, ext: "csv" | "md"): string {
+  const dir = out.replace(/[/\\]+$/, "") || out;
+  return `${dir}/${safeFilePart(name)}.${ext}`;
+}
+
+/**
+ * 실험 명세 실행 (--sweep). spec은 진입점 run.ts가 명세 파일을 import한 default export다.
+ * 정책을 모두 확인한 뒤 실행하고, 진행 상황은 stderr, 보고서(md)는 stdout으로 낸다.
+ */
+function runSweepCommand(spec: unknown, options: Readonly<CliOptions>, io: CliIo, policies: CliPolicies): number {
+  const conflicts = SWEEP_EXCLUSIVE.filter((k) => options[k] !== undefined);
+  if (conflicts.length > 0) {
+    io.stderr(`오류: --sweep은 ${conflicts.map((k) => `--${k}`).join(", ")}와 함께 쓸 수 없습니다.`);
+    return EXIT_UNSUPPORTED;
+  }
+  let parsed;
+  try {
+    parsed = parseExperimentSpec(spec);
+  } catch (e) {
+    io.stderr(`오류: 실험 명세가 올바르지 않습니다: ${options.sweep ?? ""}\n${errorMessage(e)}`);
+    return EXIT_ERROR;
+  }
+  const missing = parsed.policies.filter((n) => !policies.registry.find(n));
+  if (missing.length > 0) {
+    io.stderr(`오류: 정책을 찾을 수 없습니다: ${missing.join(", ")}\n사용 가능한 정책: ${policyList(policies)}`);
+    return EXIT_ERROR;
+  }
+  const selected = parsed.policies.map((n) => policies.registry.find(n)).filter((p): p is PolicyEntry => p !== undefined);
+  let cases;
+  try {
+    cases = parsed.cases();
+  } catch (e) {
+    io.stderr(`오류: 실험 케이스를 만들지 못했습니다: ${errorMessage(e)}`);
+    return EXIT_ERROR;
+  }
+  const result = runExperiment(cases, selected, parsed.seeds, (done, total, c) =>
+    io.stderr(`[${done}/${total}] ${c.group} / ${c.label}${c.skip !== undefined ? " (건너뜀)" : ""}`),
+  );
+  const tables = formatSweepMarkdown(result, parsed);
+  const markdown = parsed.summarize ? `${parsed.summarize(result).trimEnd()}\n\n---\n\n${tables}` : tables;
+  io.stdout(markdown);
+  if (options.out !== undefined) {
+    const files = [
+      { path: sweepFilePath(options.out, parsed.name, "csv"), content: formatSweepCsv(result.aggregates) },
+      { path: sweepFilePath(options.out, parsed.name, "md"), content: markdown },
+    ];
+    if (!writeFiles(options.out, files, io)) return EXIT_ERROR;
+    io.stdout("");
+    for (const f of files) io.stdout(`결과 저장: ${f.path}`);
+  }
+  return EXIT_OK;
+}
+
 /**
  * CLI를 실행하고 종료 코드를 돌려준다.
  * policies: 정책 목록. 생략하면 내장 정책만 쓴다(rules/ 폴더 수집은 진입점 run.ts가 해서 넘긴다).
+ * sweepSpec: --sweep일 때 진입점이 명세 파일을 import한 default export.
  */
-export function runCli(options: Readonly<CliOptions>, io: CliIo, policies: CliPolicies = cliPolicies()): number {
+export function runCli(
+  options: Readonly<CliOptions>,
+  io: CliIo,
+  policies: CliPolicies = cliPolicies(),
+  sweepSpec?: unknown,
+): number {
   if (options.help) {
     io.stdout(USAGE);
     return EXIT_OK;
@@ -313,6 +377,7 @@ export function runCli(options: Readonly<CliOptions>, io: CliIo, policies: CliPo
   if (options.list) return runList(options, io, policies);
   if (options.replay !== undefined) return runReplay(options.replay, options, io);
   warnRuleErrors(policies, io);
+  if (options.sweep !== undefined) return runSweepCommand(sweepSpec, options, io, policies);
   if (options.compare !== undefined) return runCompare(options.compare, options, io, policies);
   return runSingle(options, io, policies);
 }

@@ -1,10 +1,12 @@
-// 화면 없이 시뮬레이션을 실행하는 CLI 진입점 (make sim, make compare, make rules).
-// node API(fs, process)는 이 파일에서만 쓴다. 핵심 로직은 runCli.ts에 있다.
+// 화면 없이 시뮬레이션을 실행하는 CLI 진입점 (make sim, make compare, make rules, make sweep).
+// node API(fs, process, 실험 명세 dynamic import)는 이 파일에서만 쓴다. 핵심 로직은 runCli.ts에 있다.
 
 import { mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { resolve } from "node:path";
+import { pathToFileURL } from "node:url";
 import { entriesFromRuleModules } from "../supervisor/ruleLoader";
 import { USAGE, isArgsError, parseArgs } from "./args";
-import { type CliIo, type CliPolicies, EXIT_UNSUPPORTED, cliPolicies, runCli } from "./runCli";
+import { type CliIo, type CliPolicies, EXIT_ERROR, EXIT_UNSUPPORTED, cliPolicies, runCli } from "./runCli";
 
 /** 룰 폴더 (저장소 루트의 rules/) */
 const RULES_DIR = new URL("../../rules/", import.meta.url);
@@ -55,7 +57,17 @@ async function main(argv: readonly string[]): Promise<number> {
     nodeIo.stderr(`오류: ${parsed.error}\n\n${USAGE}`);
     return EXIT_UNSUPPORTED;
   }
-  return runCli(parsed, nodeIo, await loadPolicies());
+  let sweepSpec: unknown;
+  if (parsed.sweep !== undefined && !parsed.help && !parsed.list && parsed.replay === undefined) {
+    try {
+      const mod = (await import(pathToFileURL(resolve(parsed.sweep)).href)) as { default?: unknown };
+      sweepSpec = mod.default;
+    } catch (e) {
+      nodeIo.stderr(`오류: 실험 명세 파일을 불러오지 못했습니다: ${parsed.sweep} (${errorMessage(e)})`);
+      return EXIT_ERROR;
+    }
+  }
+  return runCli(parsed, nodeIo, await loadPolicies(), sweepSpec);
 }
 
 process.exitCode = await main(process.argv.slice(2));

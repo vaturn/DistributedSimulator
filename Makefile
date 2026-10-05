@@ -12,6 +12,7 @@ SEED     ?=
 POLICIES ?= random,greedy
 OUT      ?= out
 FILE     ?=
+SPEC     ?= experiments/ab.ts
 ARGS     ?=
 
 # git 작업 (규칙: docs/GIT.md)
@@ -31,7 +32,7 @@ SEED_ARG := $(if $(SEED),--seed $(SEED),)
 # make sim은 OUT을 명령줄(또는 환경변수)로 줬을 때만 결과 JSON을 저장한다.
 SIM_OUT_ARG := $(if $(filter command line environment,$(origin OUT)),--out $(OUT),)
 
-.PHONY: help setup dev build preview test test-watch typecheck check sim compare replay rules clean distclean git-status commit push ship sync
+.PHONY: help setup dev build preview test test-watch typecheck check sim compare replay rules sweep clean distclean git-status commit push ship sync
 
 help: ## 사용 가능한 타깃 목록
 	@echo "사용법: make <타깃> [변수=값]"
@@ -39,7 +40,7 @@ help: ## 사용 가능한 타깃 목록
 	@grep -E '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | \
 		awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-12s\033[0m %s\n", $$1, $$2}'
 	@echo
-	@echo "변수: SCENARIO=$(SCENARIO) POLICY=$(POLICY) SEED=$(SEED) POLICIES=$(POLICIES) OUT=$(OUT) FILE=$(FILE) ARGS=$(ARGS)"
+	@echo "변수: SCENARIO=$(SCENARIO) POLICY=$(POLICY) SEED=$(SEED) POLICIES=$(POLICIES) OUT=$(OUT) FILE=$(FILE) SPEC=$(SPEC) ARGS=$(ARGS)"
 
 package.json:
 	@echo "package.json이 없습니다. 먼저 M0(프로젝트 셋업)을 진행하세요. (plan/planing.md §10)" >&2
@@ -86,6 +87,9 @@ replay: node_modules ## 결과 JSON의 명령 로그를 재생해 지표 일치 
 
 rules: node_modules ## 감독관 정책 목록(내장 + rules/의 룰)과 룰 로드 오류 출력
 	$(NPM) run sim -- --list
+
+sweep: node_modules ## 실험 명세의 파라미터 격자 실행 (SPEC, OUT을 주면 <OUT>/<name>.csv·md 저장)
+	$(NPM) run sim -- --sweep $(SPEC) $(SIM_OUT_ARG)
 
 clean: ## 빌드 산출물과 실행 결과 삭제
 	rm -rf dist $(OUT)

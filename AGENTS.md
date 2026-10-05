@@ -31,6 +31,7 @@
 | **작업 완료 전 검증** | `make check` |
 | 화면 없이 실행 | `make sim SCENARIO=basic POLICY=greedy SEED=42` |
 | 정책 비교 | `make compare SCENARIO=basic POLICIES=random,greedy SEED=42` |
+| 파라미터 격자 실험 | `make sweep SPEC=experiments/ab.ts OUT=docs/experiments` (명세 형식: `experiments/README.md`) |
 | 리플레이 | `make replay FILE=out/basic-greedy-42.json` |
 | 감독관 룰 목록·로드 오류 (`rules/`) | `make rules` |
 | 정리 | `make clean` / `make distclean` |
