@@ -5,7 +5,7 @@
 import { processProgressRatio } from "../engine/rules";
 import type { Job, JobId, Module, WorldState } from "../engine/types";
 import type { DragView, TooltipLine } from "./input";
-import { jobSlices, jobTooltipLines, LEGEND_NOTE, legendItems, remainingCaption, resultLabel } from "./jobLabel";
+import { jobSlices, jobTooltipLines, LEGEND_NOTE, legendItems, processTimeLabel, remainingCaption, resultLabel } from "./jobLabel";
 import { poolCapacity, queueJobCenter, slotCenter, type Layout, type ModuleLayout, type Point, type Rect } from "./layout";
 import type { ResultColors } from "./palette";
 import {
@@ -327,7 +327,7 @@ function drawModule(
   ctx.fillStyle = COLORS.text;
   ctx.textAlign = "left";
   ctx.textBaseline = "middle";
-  const title = `${module.id} · ${module.processTime}s · 용량 ${module.capacity}`;
+  const title = `${module.id} · ${processTimeLabel(module)} · 용량 ${module.capacity}`;
   const titleX = badgeRight + BADGE_PADDING_X;
   const titleW = Math.max(0, ml.header.x + ml.header.w - BADGE_PADDING_X - titleX);
   if (titleW > 0) ctx.fillText(title, titleX, ml.header.y + ml.header.h / 2, titleW);

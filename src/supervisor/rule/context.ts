@@ -3,7 +3,7 @@
 // - 원본 상태는 # 비공개 필드에만 두고, 배열·집합은 복사해서 돌려준다(룰이 view를 바꿀 수 없다).
 // - assignTo/unassign은 명령 버퍼에 쌓기만 한다. 같은 작업의 요청이 여러 번이면 마지막 요청만 남는다.
 import { canAssign, canUnassign, estimatedWaitTime, remainingResults, usefulResults } from "../../engine/rules";
-import type { Command, Job, JobId, Module, ModuleId, ResultType } from "../../engine/types";
+import type { Command, Job, JobId, Module, ModuleId, ProcessTimeDist, ResultType } from "../../engine/types";
 import type { WorldView } from "../types";
 import type { JobRef, ModuleRef, RuleContext } from "./types";
 
@@ -33,6 +33,9 @@ class ModuleRefImpl implements ModuleRef {
   }
   get processTime(): number {
     return this.#module.processTime;
+  }
+  get processTimeDist(): ProcessTimeDist {
+    return { ...this.#module.processTimeDist };
   }
   get capacity(): number {
     return this.#module.capacity;

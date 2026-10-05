@@ -2,7 +2,15 @@
 // 화면(시나리오 선택)과 CLI(파일 경로로 받은 JSON) 모두 이 함수로 시나리오를 읽는다.
 // 실패하면 어디가 잘못되었는지 한국어 메시지로 Error를 던진다.
 
-import type { ArrivalSpec, EndCondition, ResultType, Scenario, ScenarioModule, SimConfig } from "./types";
+import type {
+  ArrivalSpec,
+  EndCondition,
+  ProcessTimeDist,
+  ResultType,
+  Scenario,
+  ScenarioModule,
+  SimConfig,
+} from "./types";
 
 type Obj = Record<string, unknown>;
 
@@ -74,6 +82,21 @@ function resultList(v: unknown, path: string): ResultType[] {
   return list;
 }
 
+/** 처리 시간 분포 (§9). 평균은 모듈 processTime이고, normal은 cv(변동 계수) > 0 */
+function parseProcessTimeDist(v: unknown, path: string): ProcessTimeDist {
+  const d = obj(v, path);
+  switch (d.kind) {
+    case "fixed":
+      return { kind: "fixed" };
+    case "exponential":
+      return { kind: "exponential" };
+    case "normal":
+      return { kind: "normal", cv: positive(d.cv, `${path}.cv`) };
+    default:
+      return fail(`${path}.kind`, '"fixed", "exponential", "normal" 중 하나여야 합니다.');
+  }
+}
+
 function parseModules(v: unknown): ScenarioModule[] {
   const list = arr(v, "modules");
   if (list.length === 0) fail("modules", "모듈이 하나 이상 있어야 합니다.");
@@ -90,8 +113,27 @@ function parseModules(v: unknown): ScenarioModule[] {
       processTime: positive(m.processTime, `${path}.processTime`),
     };
     if (m.capacity !== undefined) module.capacity = integerAtLeast(m.capacity, 1, `${path}.capacity`);
+    if (m.processTimeDist !== undefined) {
+      module.processTimeDist = parseProcessTimeDist(m.processTimeDist, `${path}.processTimeDist`);
+    }
     return module;
   });
+}
+
+/** 도착 작업의 목표 결과 설정 (모든 도착 방식 공통) */
+interface JobTemplate {
+  requiredPool: ResultType[];
+  minReq: number;
+  maxReq: number;
+}
+
+function parseJobTemplate(a: Obj): JobTemplate {
+  const requiredPool = resultList(a.requiredPool, "jobs.arrival.requiredPool");
+  const minReq = integerAtLeast(a.minReq, 1, "jobs.arrival.minReq");
+  const maxReq = integerAtLeast(a.maxReq, 1, "jobs.arrival.maxReq");
+  if (minReq > maxReq) fail("jobs.arrival", "minReq는 maxReq보다 클 수 없습니다.");
+  if (maxReq > requiredPool.length) fail("jobs.arrival.maxReq", "requiredPool의 결과 수보다 클 수 없습니다.");
+  return { requiredPool, minReq, maxReq };
 }
 
 function parseArrival(v: unknown): ArrivalSpec {
@@ -100,15 +142,23 @@ function parseArrival(v: unknown): ArrivalSpec {
     case "none":
       return { kind: "none" };
     case "poisson": {
-      const requiredPool = resultList(a.requiredPool, "jobs.arrival.requiredPool");
-      const minReq = integerAtLeast(a.minReq, 1, "jobs.arrival.minReq");
-      const maxReq = integerAtLeast(a.maxReq, 1, "jobs.arrival.maxReq");
-      if (minReq > maxReq) fail("jobs.arrival", "minReq는 maxReq보다 클 수 없습니다.");
-      if (maxReq > requiredPool.length) fail("jobs.arrival.maxReq", "requiredPool의 결과 수보다 클 수 없습니다.");
-      return { kind: "poisson", rate: nonNegative(a.rate, "jobs.arrival.rate"), requiredPool, minReq, maxReq };
+      const t = parseJobTemplate(a);
+      return { kind: "poisson", rate: nonNegative(a.rate, "jobs.arrival.rate"), ...t };
+    }
+    case "batch": {
+      const rate = nonNegative(a.rate, "jobs.arrival.rate");
+      const batchMin = integerAtLeast(a.batchMin, 1, "jobs.arrival.batchMin");
+      const batchMax = integerAtLeast(a.batchMax, 1, "jobs.arrival.batchMax");
+      if (batchMin > batchMax) fail("jobs.arrival", "batchMin은 batchMax보다 클 수 없습니다.");
+      return { kind: "batch", rate, batchMin, batchMax, ...parseJobTemplate(a) };
+    }
+    case "interval": {
+      const every = positive(a.every, "jobs.arrival.every");
+      const count = integerAtLeast(a.count, 1, "jobs.arrival.count");
+      return { kind: "interval", every, count, ...parseJobTemplate(a) };
     }
     default:
-      return fail("jobs.arrival.kind", '"poisson" 또는 "none"이어야 합니다.');
+      return fail("jobs.arrival.kind", '"poisson", "batch", "interval", "none" 중 하나여야 합니다.');
   }
 }
 
@@ -153,7 +203,7 @@ function checkProducible(scenario: Scenario): void {
     }
   });
   const arrival = scenario.jobs.arrival;
-  if (arrival?.kind === "poisson") {
+  if (arrival && arrival.kind !== "none") {
     for (const r of arrival.requiredPool) {
       if (!produced.has(r)) fail("jobs.arrival.requiredPool", `결과 "${r}"를 주는 모듈이 없습니다.`);
     }

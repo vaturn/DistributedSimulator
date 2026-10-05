@@ -5,12 +5,22 @@ export type ResultType = string;
 export type ModuleId = string;
 export type JobId = string;
 
+/**
+ * 처리 시간 분포 (기획서 §9 "처리 시간의 무작위성"). 평균은 언제나 모듈의 processTime이다.
+ * - fixed: 무작위성 없음 (기본값, 시나리오에서 생략하면 이것). 난수를 쓰지 않는다.
+ * - exponential: 평균 processTime인 지수 분포
+ * - normal: 평균 processTime, 표준편차 cv × processTime인 정규 분포 (하한 rules.MIN_SAMPLED_PROCESS_TIME으로 자름)
+ */
+export type ProcessTimeDist = { kind: "fixed" } | { kind: "exponential" } | { kind: "normal"; cv: number };
+
 export interface Module {
   id: ModuleId;
   /** 이 모듈이 주는 결과 */
   resultType: ResultType;
-  /** 시뮬레이션 시간 단위(초) */
+  /** 평균(기대) 처리 시간. 시뮬레이션 시간 단위(초) */
   processTime: number;
+  /** 처리 시간 분포. 시나리오에서 생략하면 { kind: "fixed" } */
+  processTimeDist: ProcessTimeDist;
   /** 동시에 처리할 수 있는 작업 수 (기본값 1) */
   capacity: number;
   /** 처리 중이거나 DONE_AT_MODULE인 작업 */
@@ -91,16 +101,35 @@ export const DEFAULT_CONFIG: Readonly<SimConfig> = Object.freeze({
 
 /** 작업 도착 방식 (기획서 §5.1, §9) */
 export type ArrivalSpec =
+  /** 포아송 도착: 작업이 초당 평균 rate개 */
   | { kind: "poisson"; rate: number; requiredPool: ResultType[]; minReq: number; maxReq: number }
+  /**
+   * 몰려서 도착: 묶음이 초당 평균 rate개(포아송) 오고, 묶음마다 batchMin~batchMax개(균등)의 작업이 같은 step에 생긴다.
+   * 평균 작업 도착률 = rate × (batchMin + batchMax) / 2
+   */
+  | {
+      kind: "batch";
+      rate: number;
+      batchMin: number;
+      batchMax: number;
+      requiredPool: ResultType[];
+      minReq: number;
+      maxReq: number;
+    }
+  /** 고정 간격 도착: 시각 k·every(k = 1, 2, ...)마다 count개. 평균 작업 도착률 = count / every */
+  | { kind: "interval"; every: number; count: number; requiredPool: ResultType[]; minReq: number; maxReq: number }
   | { kind: "none" };
 
 /** 시나리오의 모듈 정의 */
 export interface ScenarioModule {
   id: ModuleId;
   resultType: ResultType;
+  /** 평균(기대) 처리 시간(초) */
   processTime: number;
   /** 생략하면 1 */
   capacity?: number;
+  /** 처리 시간 분포. 생략하면 고정(기존 동작과 같다) */
+  processTimeDist?: ProcessTimeDist;
 }
 
 /** 시나리오 파일(scenarios/*.json) 형식 */
@@ -156,9 +185,24 @@ export interface RuleCheck {
  * 기본 구현은 rules.ts의 defaultRules다.
  */
 export interface RuleSet {
-  /** 작업이 이 모듈에서 처리되는 데 걸리는 시간 */
+  /**
+   * 기대(평균) 처리 시간: 작업이 이 모듈에서 처리되는 데 평균적으로 걸리는 시간.
+   * 예상 대기 시간(estimatedWaitTime)·남은 처리 시간·UI 표시·감독관 판단에 쓴다. 이번 처리의 실제 시간은 알려 주지 않는다.
+   */
   processTime(world: WorldState, job: Job, module: Module): number;
-  /** 처리 경과가 처리 시간에 도달했는가 (부동소수점 오차 허용) */
+  /**
+   * 이번 처리의 실제 처리 시간을 뽑는다. 처리를 시작할 때(processStarted) 한 번 불리고,
+   * world.ts가 그 값을 world.processDurations에 저장한다. random은 processTimeRandom이 만든 이번 처리 전용 난수다
+   * (도착용 월드 RNG와 분리, §5.1). 분포가 fixed면 random을 부르지 않는다.
+   */
+  sampleProcessTime(world: WorldState, job: Job, module: Module, random: () => number): number;
+  /**
+   * 이번 처리의 처리 시간 표본에 쓸 난수 함수 (공통 난수, §5.1·§9).
+   * (처리 시간 시드, 작업 id, 모듈 id, 이 작업이 이 모듈에서 처리를 시작한 차수 attempt(0부터))만으로 정해지는 카운터 기반 난수다.
+   * 월드 RNG(도착)를 소비하지 않으므로 감독관이 달라도 도착열이 같고, 같은 작업의 같은 차수 처리에는 같은 표본이 나온다.
+   */
+  processTimeRandom(world: WorldState, job: Job, module: Module, attempt: number): () => number;
+  /** 처리 경과가 이번 처리의 실제 처리 시간에 도달했는가 (부동소수점 오차 허용) */
   isProcessFinished(world: WorldState, job: Job, module: Module): boolean;
   /** 처리가 끝났을 때 작업이 얻는 결과 */
   gainedResults(world: WorldState, job: Job, module: Module): ResultType[];
@@ -214,12 +258,22 @@ export interface WorldState {
   rules: RuleSet;
   /** 작업 도착 방식 */
   arrival: ArrivalSpec;
-  /** 시드 RNG 상태 (직렬 가능한 32비트 정수) */
+  /** 시드 RNG 상태 (직렬 가능한 32비트 정수). 작업 도착(arrivals)만 소비한다. */
   rngState: number;
+  /** 처리 시간 표본용 시드 (시나리오 seed에서 rules.deriveProcessTimeSeed로 파생, 생성 후 바뀌지 않는다) */
+  processTimeSeed: number;
+  /** 작업별·모듈별 처리 시작 횟수 (processTimeRandom의 attempt). 처리를 시작할 때마다 1 늘린다. */
+  processAttempts: Map<JobId, Map<ModuleId, number>>;
   /** 다음에 생성할 작업 번호 */
   nextJobNumber: number;
   /** 이동 중인 작업 정보 (삽입 순서 = 이동 시작 순서) */
   moves: Map<JobId, MoveInfo>;
+  /**
+   * 처리 중인 작업별 이번 처리의 실제 처리 시간 (rules.sampleProcessTime으로 처리 시작 때 뽑은 값).
+   * 처리가 끝나거나 취소되면 지운다. 진행 판정(isProcessFinished)과 진행률(processProgressRatio)만 쓰고,
+   * 감독관용 조회(estimatedWaitTime, remainingProcessTime)는 미래를 알지 않도록 기대값을 쓴다.
+   */
+  processDurations: Map<JobId, number>;
   /** 지표 누적값. 갱신은 metrics.ts만 한다(world.ts는 호출만). */
   metricsState: MetricsState;
 }

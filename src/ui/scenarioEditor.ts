@@ -23,6 +23,8 @@ import {
   updateDraft,
   updateModule,
   type DraftError,
+  type ArrivalKind,
+  type DistKind,
   type DraftResult,
   type EndKind,
   type ModuleDraft,
@@ -52,13 +54,20 @@ const LABELS = {
   resultType: "결과",
   processTime: "처리(s)",
   capacity: "용량",
+  dist: "분포",
+  cv: "cv",
   defaultValue: "기본값",
   remove: "✕",
   add: "+ 모듈 추가",
   initial: "초기 작업 (한 줄에 하나, 결과는 쉼표로)",
   arrival: "작업 도착",
-  arrivalEnabled: "포아송 도착 사용",
+  arrivalEnabled: "작업 도착 사용",
+  arrivalKind: "도착 방식",
   rate: "도착률(개/s)",
+  batchMin: "묶음 최소 개수",
+  batchMax: "묶음 최대 개수",
+  every: "간격(s)",
+  count: "간격마다 개수",
   minReq: "최소 결과 수",
   maxReq: "최대 결과 수",
   autoPool: "결과 목록을 모듈 결과 종류로 자동 맞춤",
@@ -84,6 +93,9 @@ const LABELS = {
 } as const;
 const TITLES = {
   capacity: "동시에 처리하는 작업 수. 비우면 기본값",
+  dist: "처리 시간 분포. 평균은 처리(s). 처리를 시작할 때마다 시드 난수로 실제 처리 시간을 뽑는다",
+  cv: "정규 분포의 변동 계수 (표준편차 = cv × 평균)",
+  rate: "포아송: 작업 도착률, 묶음: 묶음 도착률 (평균 작업 도착률 = 묶음 도착률 × (최소 + 최대) / 2)",
   remove: "이 모듈 삭제",
   add: "마지막 모듈을 복사해 새 id로 추가합니다",
   apply: "편집한 시나리오로 처음부터 다시 시작합니다 (선택한 감독관 유지, 시드는 시나리오 시드)",
@@ -98,6 +110,19 @@ const END_OPTIONS: readonly { value: EndKind; label: string }[] = [
   { value: "time", label: "시간(s)" },
   { value: "completed", label: "완료 수" },
   { value: "allDone", label: "모든 작업 완료" },
+];
+/** 처리 시간 분포 선택지 */
+const DIST_OPTIONS: readonly { value: DistKind; label: string }[] = [
+  { value: "default", label: "기본(고정)" },
+  { value: "fixed", label: "고정" },
+  { value: "exponential", label: "지수" },
+  { value: "normal", label: "정규" },
+];
+/** 도착 방식 선택지 */
+const ARRIVAL_OPTIONS: readonly { value: ArrivalKind; label: string }[] = [
+  { value: "poisson", label: "포아송" },
+  { value: "batch", label: "묶음(몰려서)" },
+  { value: "interval", label: "고정 간격" },
 ];
 /** 참/거짓/기본값 선택지 값 */
 const TRI_DEFAULT = "";
@@ -316,6 +341,25 @@ export function createScenarioEditor(root: HTMLElement, initial: Scenario, callb
     return select;
   }
 
+  function optionSelect<T extends string>(
+    options: readonly { value: T; label: string }[],
+    value: T,
+    onChange: (v: T) => void,
+  ): HTMLSelectElement {
+    const select = el("select", "editor-input");
+    for (const o of options) {
+      const opt = el("option", undefined, o.label);
+      opt.value = o.value;
+      select.append(opt);
+    }
+    select.value = value;
+    select.addEventListener("change", () => {
+      const picked = options.find((o) => o.value === select.value);
+      if (picked) onChange(picked.value);
+    });
+    return select;
+  }
+
   function moduleRow(m: ModuleDraft, i: number): HTMLTableRowElement {
     const row = el("tr");
     const path = `modules[${i}]`;
@@ -335,6 +379,14 @@ export function createScenarioEditor(root: HTMLElement, initial: Scenario, callb
       update();
     });
     remove.classList.add("editor-remove");
+    const dist = optionSelect(DIST_OPTIONS, m.distKind, (kind) => {
+      cv.disabled = kind !== "normal";
+      edit(updateModule(draft, i, { distKind: kind }));
+    });
+    dist.title = TITLES.dist;
+    const cv = numberInput(m.cv, (input) => edit(updateModule(draft, i, { cv: readNumber(input) })), DECIMAL_STEP);
+    cv.title = TITLES.cv;
+    cv.disabled = m.distKind !== "normal";
     row.append(
       cell(textInput(m.id, (v) => edit(updateModule(draft, i, { id: v }))), "id", LABELS.id),
       cell(textInput(m.resultType, (v) => edit(updateModule(draft, i, { resultType: v }))), "resultType", LABELS.resultType),
@@ -344,6 +396,8 @@ export function createScenarioEditor(root: HTMLElement, initial: Scenario, callb
         LABELS.processTime,
       ),
       cell(capacity, "capacity", LABELS.capacity),
+      cell(dist, "processTimeDist.kind", LABELS.dist),
+      cell(cv, "processTimeDist.cv", LABELS.cv),
       el("td"),
     );
     row.lastElementChild?.append(remove);
@@ -371,7 +425,7 @@ export function createScenarioEditor(root: HTMLElement, initial: Scenario, callb
     const table = el("table", "editor-modules");
     const thead = el("thead");
     const hr = el("tr");
-    for (const h of [LABELS.id, LABELS.resultType, LABELS.processTime, LABELS.capacity, ""]) hr.append(el("th", undefined, h));
+    for (const h of [LABELS.id, LABELS.resultType, LABELS.processTime, LABELS.capacity, LABELS.dist, LABELS.cv, ""]) hr.append(el("th", undefined, h));
     thead.append(hr);
     const tbody = el("tbody");
     draft.modules.forEach((m, i) => tbody.append(moduleRow(m, i)));
@@ -398,7 +452,13 @@ export function createScenarioEditor(root: HTMLElement, initial: Scenario, callb
     enabled.addEventListener("change", () => edit(updateArrival(draft, { enabled: enabled.checked })));
     const enabledLabel = el("label", "editor-check");
     enabledLabel.append(enabled, LABELS.arrivalEnabled);
+    const arrivalKind = optionSelect(ARRIVAL_OPTIONS, draft.arrival.kind, (kind) => edit(updateArrival(draft, { kind })));
     const rate = numberInput(draft.arrival.rate, (input) => edit(updateArrival(draft, { rate: readNumber(input) })), DECIMAL_STEP);
+    rate.title = TITLES.rate;
+    const batchMin = numberInput(draft.arrival.batchMin, (input) => edit(updateArrival(draft, { batchMin: readNumber(input) })));
+    const batchMax = numberInput(draft.arrival.batchMax, (input) => edit(updateArrival(draft, { batchMax: readNumber(input) })));
+    const every = numberInput(draft.arrival.every, (input) => edit(updateArrival(draft, { every: readNumber(input) })), DECIMAL_STEP);
+    const count = numberInput(draft.arrival.count, (input) => edit(updateArrival(draft, { count: readNumber(input) })));
     const minReq = numberInput(draft.arrival.minReq, (input) => edit(updateArrival(draft, { minReq: readNumber(input) })));
     const maxReq = numberInput(draft.arrival.maxReq, (input) => edit(updateArrival(draft, { maxReq: readNumber(input) })));
     const autoPool = el("input");
@@ -413,7 +473,12 @@ export function createScenarioEditor(root: HTMLElement, initial: Scenario, callb
     pool.title = TITLES.pool;
     const arrivalGrid = el("div", "editor-grid");
     arrivalGrid.append(
+      labeled(LABELS.arrivalKind, arrivalKind, "jobs.arrival.kind"),
       labeled(LABELS.rate, rate, "jobs.arrival.rate"),
+      labeled(LABELS.batchMin, batchMin, "jobs.arrival.batchMin"),
+      labeled(LABELS.batchMax, batchMax, "jobs.arrival.batchMax"),
+      labeled(LABELS.every, every, "jobs.arrival.every"),
+      labeled(LABELS.count, count, "jobs.arrival.count"),
       labeled(LABELS.minReq, minReq, "jobs.arrival.minReq"),
       labeled(LABELS.maxReq, maxReq, "jobs.arrival.maxReq"),
     );
@@ -466,7 +531,13 @@ export function createScenarioEditor(root: HTMLElement, initial: Scenario, callb
 
     refreshDerived = () => {
       const on = draft.arrival.enabled;
-      rate.disabled = !on;
+      const kind = draft.arrival.kind;
+      arrivalKind.disabled = !on;
+      rate.disabled = !on || kind === "interval";
+      batchMin.disabled = !on || kind !== "batch";
+      batchMax.disabled = !on || kind !== "batch";
+      every.disabled = !on || kind !== "interval";
+      count.disabled = !on || kind !== "interval";
       minReq.disabled = !on;
       maxReq.disabled = !on;
       autoPool.disabled = !on;

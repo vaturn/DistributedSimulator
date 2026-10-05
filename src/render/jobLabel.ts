@@ -3,7 +3,7 @@
 // DOM·Canvas를 쓰지 않는다.
 
 import { processProgressRatio, remainingResults, usefulResults } from "../engine/rules";
-import type { Job, JobId, ModuleId, ResultType, WorldState } from "../engine/types";
+import type { Job, JobId, Module, ModuleId, ProcessTimeDist, ResultType, WorldState } from "../engine/types";
 import type { TooltipLine } from "./input";
 import type { ResultColors } from "./palette";
 import { ACQUIRED_MARK, PERCENT, RESULT_LABEL_MAX_CHARS, RESULT_LABEL_SEPARATOR, TIME_DECIMALS } from "./theme";
@@ -21,6 +21,32 @@ export function orderResults(results: Iterable<ResultType>, colors: Pick<ResultC
 /** 라벨 목록을 구분자로 잇는다. 비어 있으면 "없음" */
 function joinLabels(results: readonly ResultType[]): string {
   return results.length === 0 ? "없음" : results.map(resultLabel).join(` ${RESULT_LABEL_SEPARATOR} `);
+}
+
+/** 처리 시간 분포 이름 (모듈 제목·편집기 표시용) */
+export const PROCESS_TIME_DIST_NAMES: Readonly<Record<ProcessTimeDist["kind"], string>> = {
+  fixed: "고정",
+  exponential: "지수",
+  normal: "정규",
+};
+/** 무작위 분포일 때 평균 처리 시간 앞에 붙이는 표시 ("약") */
+const APPROX_MARK = "~";
+
+/**
+ * 모듈 제목의 처리 시간 표기. 고정이면 "2s", 무작위 분포면 평균 앞에 "~"와 분포 이름을 붙인다
+ * (예: "~2s(지수)", "~2s(정규 cv0.3)"). 표시하는 값은 기대(평균) 처리 시간이다.
+ */
+export function processTimeLabel(module: Pick<Module, "processTime" | "processTimeDist">): string {
+  const dist = module.processTimeDist;
+  const mean = `${module.processTime}s`;
+  switch (dist.kind) {
+    case "fixed":
+      return mean;
+    case "exponential":
+      return `${APPROX_MARK}${mean}(${PROCESS_TIME_DIST_NAMES.exponential})`;
+    case "normal":
+      return `${APPROX_MARK}${mean}(${PROCESS_TIME_DIST_NAMES.normal} cv${dist.cv})`;
+  }
 }
 
 /** 파이 조각 하나 */

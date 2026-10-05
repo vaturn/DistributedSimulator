@@ -83,13 +83,14 @@ make compare SCENARIO=ab-batch POLICIES=sequential,immediate
 | 멤버 | 설명 |
 |---|---|
 | `id`, `resultType`, `capacity` | 모듈 정보 |
-| `processTime` | 시나리오에 정의된 기본 처리 시간(초) |
-| `processTimeFor(job)` | 이 작업이 실제로 걸리는 처리 시간 (규칙 `processTime` 경유) |
+| `processTime` | 시나리오에 정의된 평균(기대) 처리 시간(초) |
+| `processTimeDist` | 처리 시간 분포 (복사본): `{ kind: "fixed" }`, `{ kind: "exponential" }`, `{ kind: "normal", cv }`. fixed가 아니면 실제 처리 시간은 처리할 때마다 달라지고 미리 알 수 없다 |
+| `processTimeFor(job)` | 이 작업의 기대(평균) 처리 시간 (규칙 `processTime` 경유). 이번 처리의 실제 처리 시간은 알려 주지 않는다 |
 | `isIdle()` | 슬롯도 대기열도 비어 있는가 |
 | `freeSlots()` | 지금 비어 있는 슬롯 수 |
 | `queueLength()` | 대기열 길이 |
 | `processingJobs()` | 지금 처리 중인 작업 |
-| `estimatedWait(job?)` | 새 작업이 처리를 시작하기까지 예상 대기 시간(초). 이번 step에 이 모듈로 요청한 작업도 줄에 넣어 계산한다. `job`을 주면 그 작업 자신은 뺀다 |
+| `estimatedWait(job?)` | 새 작업이 처리를 시작하기까지 예상 대기 시간(초). 기대 처리 시간 기준(처리 중인 작업은 `max(0, 기대 처리 시간 − 경과)`). 이번 step에 이 모듈로 요청한 작업도 줄에 넣어 계산한다. `job`을 주면 그 작업 자신은 뺀다 |
 | `canAccept(job)` | 이 작업을 배치할 수 있는가 (`rules.canAssign`) |
 | `isUsefulFor(job)` | 이 모듈의 처리가 작업에 아직 없는 필요한 결과를 주는가 (`rules.usefulResults`) |
 

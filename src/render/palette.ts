@@ -18,7 +18,7 @@ export function collectResultTypes(scenario: Scenario): ResultType[] {
   for (const m of scenario.modules) seen.add(m.resultType);
   for (const j of scenario.jobs.initial) for (const r of j.required) seen.add(r);
   const arrival = scenario.jobs.arrival;
-  if (arrival && arrival.kind === "poisson") for (const r of arrival.requiredPool) seen.add(r);
+  if (arrival && arrival.kind !== "none") for (const r of arrival.requiredPool) seen.add(r);
   return [...seen];
 }
 

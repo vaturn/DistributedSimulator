@@ -26,7 +26,7 @@
 
 ### 2.2 핵심 규칙
 
-1. 작업이 모듈에 **도착**하면 그 모듈의 `processTime`만큼 처리된다.
+1. 작업이 모듈에 **도착**하면 그 모듈의 `processTime`만큼 처리된다. 모듈에 처리 시간 분포(`processTimeDist`, §9)를 주면 `processTime`은 평균이고, 처리를 시작할 때마다 실제 처리 시간을 시드에서 파생한 처리 시간 전용 난수(도착 RNG와 분리, §5.1)로 뽑는다.
 2. 처리가 끝나면 작업은 그 모듈의 결과(`module.resultType`)를 **획득**한다.
 3. 작업은 `required: Set<ResultType>`(목표 결과)과 `acquired: Set<ResultType>`(획득한 결과)를 가진다.
 4. `required ⊆ acquired`가 되는 순간 작업은 **완료**된다. 화면에서 사라지고(페이드아웃) 완료 카운터가 1 증가한다.
@@ -75,7 +75,7 @@
 - **테스트: Vitest**: 엔진 로직만 단위 테스트한다.
 - 패키지 매니저: npm. 단, 명령은 **Makefile을 통해서만** 실행한다(`make help`). npm scripts와의 약속은 `AGENTS.md`에 있다.
 - 화면 없는 실행(CLI): `tsx`
-- **화면 시나리오 편집기**: 사이드바 "모듈 편집"에서 순수 DOM으로 현재 시나리오를 고친다(모듈 추가·삭제, 결과 종류·처리 시간·용량, 도착·종료 조건·주요 설정). 검증은 엔진의 `parseScenario`를 그대로 쓰고(규칙 중복 없음), "적용"하면 편집한 시나리오(`custom`, "사용자 편집")로 처음부터 다시 시작한다. 시나리오 JSON 저장/불러오기를 지원하고 마지막 편집은 `localStorage`에 남는다. 순수 로직은 `ui/scenarioDraft.ts`, DOM은 `ui/scenarioEditor.ts`.
+- **화면 시나리오 편집기**: 사이드바 "모듈 편집"에서 순수 DOM으로 현재 시나리오를 고친다(모듈 추가·삭제, 결과 종류·처리 시간·분포·용량, 도착 방식(포아송/묶음/고정 간격)·종료 조건·주요 설정). 검증은 엔진의 `parseScenario`를 그대로 쓰고(규칙 중복 없음), "적용"하면 편집한 시나리오(`custom`, "사용자 편집")로 처음부터 다시 시작한다. 시나리오 JSON 저장/불러오기를 지원하고 마지막 편집은 `localStorage`에 남는다. 순수 로직은 `ui/scenarioDraft.ts`, DOM은 `ui/scenarioEditor.ts`.
 - **감독관 룰: `rules/*.ts`**: 정책 감독관은 저장소 루트 `rules/` 폴더에 TypeScript 클래스로 작성한다. `Rule`(`src/supervisor/rule`)을 상속해 `decide(ctx)`를 구현하고 `export default` 하면 감독관으로 등록된다. 룰은 `RuleContext`/`ModuleRef`/`JobRef` 객체로 월드를 읽고 `job.assignTo(module)`/`job.unassign()`으로 명령을 요청만 한다(상태 직접 변경 불가). 모든 판정은 `engine/rules.ts`를 거친다. 난수는 `ctx.random()`(시드 RNG)만 쓴다. 내장 정책 `random`·`greedy`도 `rules/`의 룰이다. 브라우저는 Vite `import.meta.glob`, CLI는 node로 `rules/*.ts`를 읽고, 검사는 `src/supervisor/ruleLoader.ts` 한 곳에서 한다. 작성법은 `rules/README.md`.
 
 ## 4. 아키텍처
@@ -152,10 +152,17 @@ type ResultType = string;          // 예: "A", "B", "C"
 type ModuleId = string;
 type JobId = string;
 
+// 처리 시간 분포 (§9). 평균은 언제나 모듈 processTime.
+type ProcessTimeDist =
+  | { kind: "fixed" }                // 기본값(생략 시). 난수를 쓰지 않는다
+  | { kind: "exponential" }          // 평균 processTime인 지수 분포
+  | { kind: "normal"; cv: number };  // 평균 processTime, 표준편차 cv·processTime (cv > 0, 하한으로 자름)
+
 interface Module {
   id: ModuleId;
   resultType: ResultType;          // 이 모듈이 주는 결과
-  processTime: number;             // 시뮬레이션 시간 단위(초)
+  processTime: number;             // 평균(기대) 처리 시간, 시뮬레이션 시간 단위(초)
+  processTimeDist: ProcessTimeDist; // 시나리오에서 생략하면 { kind: "fixed" }
   capacity: number;                // 기본값 1
   slots: JobId[];                  // 처리 중이거나 DONE_AT_MODULE인 작업
   queue: JobId[];                  // 대기열
@@ -192,6 +199,8 @@ interface WorldState {
   completedCount: number;
   events: SimEvent[];              // 이번 step에서 발생한 이벤트 (렌더러와 로그가 사용)
   config: SimConfig;
+  processDurations: Map<JobId, number>; // 처리 중인 작업의 이번 처리 실제 처리 시간 (처리 시작 때 뽑음, 끝나거나 취소되면 지움)
+  // (그 밖에 rules, arrival, rngState(도착 전용), processTimeSeed·processAttempts(처리 시간 공통 난수, §5.1), moves, metricsState 등 내부 상태가 있다: engine/types.ts)
 }
 
 // 설정. 기본값은 §9를 따르며 코드에서는 engine/types.ts의 DEFAULT_CONFIG 한 곳에만 둔다.
@@ -211,11 +220,16 @@ interface SimConfig {
 interface Scenario {
   name: string;
   seed: number;
-  modules: { id: ModuleId; resultType: ResultType; processTime: number; capacity?: number }[];
+  modules: { id: ModuleId; resultType: ResultType; processTime: number; capacity?: number; processTimeDist?: ProcessTimeDist }[];
   jobs: {
     initial: { required: ResultType[] }[];
     arrival?:
       | { kind: "poisson"; rate: number; requiredPool: ResultType[]; minReq: number; maxReq: number }
+      // 몰려서 도착: 묶음이 초당 rate개(포아송), 묶음마다 batchMin~batchMax개(균등)가 같은 step에 생긴다.
+      // 평균 작업 도착률 = rate × (batchMin + batchMax) / 2
+      | { kind: "batch"; rate: number; batchMin: number; batchMax: number; requiredPool: ResultType[]; minReq: number; maxReq: number }
+      // 고정 간격: 시각 k·every(k ≥ 1)마다 count개 (그 시각 이상인 첫 step 시작에 생김). 평균 = count / every
+      | { kind: "interval"; every: number; count: number; requiredPool: ResultType[]; minReq: number; maxReq: number }
       | { kind: "none" };
   };
   config?: Partial<SimConfig>;
@@ -249,6 +263,34 @@ interface Scenario {
 }
 ```
 
+처리 시간 분포와 몰려서 도착을 쓰는 예 (생략하면 위처럼 고정 처리 시간·포아송 도착):
+
+```json
+{
+  "modules": [
+    { "id": "M1", "resultType": "A", "processTime": 2, "processTimeDist": { "kind": "exponential" } },
+    { "id": "M2", "resultType": "B", "processTime": 5, "processTimeDist": { "kind": "normal", "cv": 0.3 } }
+  ],
+  "jobs": {
+    "initial": [],
+    "arrival": { "kind": "batch", "rate": 0.1, "batchMin": 2, "batchMax": 4, "requiredPool": ["A", "B"], "minReq": 1, "maxReq": 2 }
+  }
+}
+```
+
+- 검증(`parseScenario`): `processTimeDist.kind`는 `fixed`/`exponential`/`normal`, `normal`은 `cv > 0`. `batch`는 `rate ≥ 0`, `batchMin`·`batchMax`는 1 이상의 정수이고 `batchMin ≤ batchMax`. `interval`은 `every > 0`, `count`는 1 이상의 정수. 목표 결과 설정(`requiredPool`, `minReq`, `maxReq`)은 모든 도착 방식이 포아송과 같은 규칙으로 검증한다.
+
+#### 처리 시간 무작위성의 규칙 (확정, `rules.ts`)
+
+- **샘플링 시점·저장 위치**: 처리를 시작할 때(`processStarted`: 도착 즉시 시작, 대기열에서 슬롯으로, 같은 모듈 재처리) `RuleSet.sampleProcessTime`으로 이번 처리의 실제 처리 시간을 한 번 뽑아 `world.processDurations`(작업 id → 시간)에 저장한다. 처리가 끝나거나(`processFinished`) 취소·이동하면 지운다. 재처리·취소 후 재시작은 새로 뽑는다. `Job`에 넣지 않은 이유: 처리 한 번에만 유효한 엔진 내부 값이라 작업 데이터 모델(§5)을 바꾸지 않고 `moves`처럼 world에 둔다.
+- **두 가지 처리 시간**: `RuleSet.processTime` = 기대(평균) 처리 시간, `RuleSet.sampleProcessTime` = 이번 처리의 실제 처리 시간. 진행 판정(`isProcessFinished`)과 진행률(`processProgressRatio`)은 실제 처리 시간(`rules.currentProcessDuration`)을 쓴다.
+- **감독관은 미래를 모른다**: `remainingProcessTime`과 `estimatedWaitTime`은 처리 중인 작업도 실제 표본이 아니라 `max(0, 기대 처리 시간 − progress)`로 계산한다. 룰 API의 `ModuleRef.processTime`/`processTimeFor`도 기대값이다. 분포가 `fixed`면 실제 값과 같다.
+- **분포**: `exponential`은 `−평균·ln(1−u)`(난수 1개), `normal`은 Box-Muller로 `평균·(1 + cv·z)`(난수 2개). 무작위 표본은 하한 `MIN_SAMPLED_PROCESS_TIME = 0.001`초로 자른다(처리 시간이 양수여야 진행률이 정의되고, dt보다 훨씬 작아 결과에는 dt 격자 오차 이하의 영향만 준다. cv ≤ 0.3이면 잘릴 확률 ≈ 0.04%로 평균에 영향이 없고, cv가 크면 평균이 약간 커진다).
+- **난수 흐름 분리(공통 난수, 확정)**: 처리 시간 표본은 도착용 월드 RNG(`world.rngState`, 작업 도착만 소비)를 쓰지 않는다. 대신 카운터(해시) 기반 난수를 쓴다: `RuleSet.processTimeRandom(world, job, module, attempt)`가 (처리 시간 시드, 작업 id, 모듈 id, 차수)를 해시(FNV-1a + murmur3 fmix32 결합, `engine/rng.ts`)해 만든 상태에서 mulberry32 흐름을 시작한다. 처리 시간 시드는 `rules.deriveProcessTimeSeed(seed)` = seed와 이름 붙은 상수 `PROCESS_TIME_STREAM_SALT`의 해시 결합이고 `world.processTimeSeed`에 둔다. 차수 `attempt`는 이 작업이 이 모듈에서 처리를 시작한 횟수(0부터, 취소된 시작·재처리도 센다)이며 `world.processAttempts`에 센다(world.ts는 세기와 호출만 한다).
+  - **이유**: 같은 흐름을 쓰면 감독관마다 처리 시작 순서가 달라 도착열까지 달라져, 정책 비교가 같은 도착열로 짝지은 비교가 아니게 된다. 단순히 흐름만 분리하면 도착열은 같아지지만 처리 시간 표본은 처리 시작 순서대로 배정되어 작업마다 달라진다. 카운터 방식은 도착열이 감독관과 무관하게 같고(시나리오·seed만으로 정해짐), 같은 작업이 같은 모듈에서 같은 차수로 처리되면 감독관과 무관하게 같은 처리 시간이 나와 분산이 더 줄어든 공정한 비교가 된다. 상태를 이어 쓰지 않으므로 처리 순서에 의존하지 않는다.
+- **결정성**: 같은 시나리오·seed·명령이면 같은 결과다. `fixed`(생략 포함)는 처리 시간 난수를 전혀 쓰지 않고 도착 흐름도 그대로라 기존 결과와 비트 단위로 같다.
+- **화면**: 모듈 제목은 분포가 있으면 `~2s(지수)`, `~5s(정규 cv0.3)`처럼 평균 앞에 `~`를 붙인다(`render/jobLabel.processTimeLabel`). 시나리오 편집기 모듈 표에 분포(기본/고정/지수/정규)·cv 칸, 작업 도착에 방식(포아송/묶음/고정 간격) 선택이 있다.
+
 ### 5.2 대표 시나리오: A·B 순차 vs 즉시
 
 결과 A, B를 주는 모듈 두 개(처리 시간 2초, 용량 1로 같음)에 모든 작업이 A와 B를 둘 다 필요로 하는 상황에서 두 감독관 전략을 비교한다.
@@ -276,7 +318,7 @@ interface Scenario {
   2. 새로 도착하는 작업을 생성한다(arrival 설정에 따라).
   3. `MOVING` 작업을 진행시키고, 도착하면 슬롯이나 대기열에 넣는다. step 시작에 남은 이동 시간이 0 이하면 도착(이번 step부터 처리), 아니면 남은 이동 시간에서 dt를 뺀다(§2.3 이동 시간 규칙, `rules.advanceMove`).
   4. 대기열 → 빈 슬롯으로 옮긴다(FIFO).
-  5. `PROCESSING` 작업의 `progress += dt`. `progress >= processTime`이면 결과를 획득하고 `DONE_AT_MODULE`로 바꾼다. `processFinished` 시각은 `simTime + dt`(§2.2-7).
+  5. `PROCESSING` 작업의 `progress += dt`. `progress >= 이번 처리의 실제 처리 시간`(고정 분포면 `processTime`, 처리 시작 때 뽑은 값, §5.1)이면 결과를 획득하고 `DONE_AT_MODULE`로 바꾼다. `processFinished` 시각은 `simTime + dt`(§2.2-7).
   6. 완료를 판정해서 `COMPLETED`로 바꾸고, 슬롯에서 빼고, `completedCount++` 한다. `completedAt`과 `jobCompleted` 시각은 `simTime + dt`. 완료되지 않은 `DONE_AT_MODULE` 작업은 `occupyWhenDone = false`(기본)이면 슬롯에서 빼고 `POOL`로 돌려보내며 `jobReturned`(시각 `simTime + dt`)를 남긴다(`rules.releaseWhenDone`). 이 단계에서 빈 슬롯은 다음 step 4단계에서 채운다.
   7. 지표를 갱신한다. 모듈 `busyTime += 처리 중 슬롯 수 × dt`.
   8. `simTime += dt`
@@ -341,8 +383,8 @@ interface Scenario {
 | 모듈 용량 | 1 | 모듈별 지정 |
 | 대기열 상한 (`queueLimit`) | 무제한. 상한을 정해도 초과 배치는 **허용 + warning**(확정, §2.2-6) | — |
 | 같은 모듈 재배치 | `DONE_AT_MODULE`이면 다시 처리, 그 밖의 상태는 상태 불변 + warning(확정, §2.4) | — |
-| 작업 등장 방식 | 초기 작업 + 포아송 도착 | 초기 작업만, 고정 간격 |
-| 처리 시간의 무작위성 | 고정값 | 분포(정규/지수) |
+| 작업 등장 방식 | 초기 작업 + 포아송 도착 | 초기 작업만(`arrival` 생략 또는 `none`). **구현됨**: 몰려서 도착 `{ kind: "batch", rate, batchMin, batchMax, ... }`(평균 작업 도착률 = rate × (batchMin+batchMax)/2), 고정 간격 `{ kind: "interval", every, count, ... }` (§5, §5.1) |
+| 처리 시간의 무작위성 | 고정값 (`processTimeDist` 생략 = `fixed`) | **구현됨**: 모듈별 `processTimeDist: { kind: "exponential" }` 또는 `{ kind: "normal", cv }` (평균 = processTime, 처리 시작 때 샘플링, 감독관 예상치는 기대값, §5.1). 난수는 도착 RNG와 분리된 (작업, 모듈, 차수) 해시 기반 공통 난수(§5.1): 감독관이 달라도 도착열과 같은 작업·차수의 처리 시간이 같다 |
 | 종료 조건 | 시간 300s | 작업 N개 완료, 모든 작업 완료 |
 
 > 사용자가 이 항목 중 하나를 확정하면 이 표를 갱신한다.

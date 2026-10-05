@@ -3,7 +3,15 @@
 // 초안 → Scenario 변환을 다룬다. 검증 규칙은 여기서 새로 만들지 않고 engine/scenario.ts의 parseScenario를 그대로 쓴다.
 
 import { parseScenario } from "../engine/scenario";
-import type { ArrivalSpec, EndCondition, ResultType, Scenario, ScenarioModule, SimConfig } from "../engine/types";
+import type {
+  ArrivalSpec,
+  EndCondition,
+  ProcessTimeDist,
+  ResultType,
+  Scenario,
+  ScenarioModule,
+  SimConfig,
+} from "../engine/types";
 
 /** 편집 중인 모듈 한 줄. 입력이 비었거나 숫자가 아니면 NaN(→ parseScenario가 오류로 알린다). */
 export interface ModuleDraft {
@@ -12,15 +20,34 @@ export interface ModuleDraft {
   processTime: number;
   /** null이면 생략(엔진 기본 용량) */
   capacity: number | null;
+  /** 처리 시간 분포. "default"면 생략(엔진 기본: 고정) */
+  distKind: DistKind;
+  /** distKind가 "normal"일 때 쓰는 변동 계수(표준편차 / 평균). 다른 종류로 바꿔도 값을 기억한다 */
+  cv: number;
 }
 
-/** 작업 도착(포아송) 편집 값 */
+/** 처리 시간 분포 선택. "default"는 processTimeDist 생략 */
+export type DistKind = "default" | ProcessTimeDist["kind"];
+
+/** 도착 방식 (none 제외) */
+export type ArrivalKind = Exclude<ArrivalSpec["kind"], "none">;
+
+/** 작업 도착 편집 값 */
 export interface ArrivalDraft {
-  /** 포아송 도착을 쓰는가 */
+  /** 작업 도착을 쓰는가 */
   enabled: boolean;
+  /** 도착 방식: 포아송, 묶음(몰려서), 고정 간격 */
+  kind: ArrivalKind;
   /** 도착을 끌 때의 표현: 원래 시나리오가 arrival을 생략했으면 "omit", { kind: "none" }이면 "none" */
   offKind: "omit" | "none";
+  /** poisson: 작업 도착률, batch: 묶음 도착률 (개/s) */
   rate: number;
+  /** batch: 묶음 크기 범위 */
+  batchMin: number;
+  batchMax: number;
+  /** interval: 간격(s)과 간격마다 생기는 작업 수 */
+  every: number;
+  count: number;
   minReq: number;
   maxReq: number;
   /** autoPool이 false일 때 쓰는 결과 목록 */
@@ -68,6 +95,13 @@ export type DraftResult = { ok: true; scenario: Scenario } | { ok: false; errors
 /** 새로 켜는 도착 설정의 기본값 (원래 시나리오에 포아송 도착이 없을 때) */
 export const NEW_ARRIVAL_RATE = 0.3;
 export const NEW_ARRIVAL_MIN_REQ = 1;
+/** 묶음·고정 간격 도착으로 처음 바꿀 때의 기본값 */
+export const NEW_BATCH_MIN = 2;
+export const NEW_BATCH_MAX = 4;
+export const NEW_INTERVAL_EVERY = 5;
+export const NEW_INTERVAL_COUNT = 1;
+/** 정규 분포로 처음 바꿀 때의 변동 계수 */
+export const NEW_NORMAL_CV = 0.3;
 /** 종료 조건 값이 없을 때(기본값·allDone에서 바꿀 때) 채우는 값 */
 export const NEW_END_VALUE = 300;
 /** 모듈이 하나도 없을 때 새 모듈의 기본값 */
@@ -96,16 +130,41 @@ function samePool(a: readonly ResultType[], b: readonly ResultType[]): boolean {
 }
 
 function moduleToDraft(m: ScenarioModule): ModuleDraft {
-  return { id: m.id, resultType: m.resultType, processTime: m.processTime, capacity: m.capacity ?? null };
+  const dist = m.processTimeDist;
+  return {
+    id: m.id,
+    resultType: m.resultType,
+    processTime: m.processTime,
+    capacity: m.capacity ?? null,
+    distKind: dist?.kind ?? "default",
+    cv: dist?.kind === "normal" ? dist.cv : NEW_NORMAL_CV,
+  };
+}
+
+/** 모듈 초안의 분포 → 시나리오 processTimeDist (생략이면 undefined) */
+function distToRaw(m: ModuleDraft): Record<string, unknown> | undefined {
+  switch (m.distKind) {
+    case "default":
+      return undefined;
+    case "normal":
+      return { kind: "normal", cv: m.cv };
+    default:
+      return { kind: m.distKind };
+  }
 }
 
 function arrivalToDraft(arrival: ArrivalSpec | undefined, modules: readonly ModuleDraft[]): ArrivalDraft {
   const auto = autoRequiredPool(modules);
-  if (arrival?.kind === "poisson") {
+  if (arrival && arrival.kind !== "none") {
     return {
       enabled: true,
+      kind: arrival.kind,
       offKind: "omit",
-      rate: arrival.rate,
+      rate: arrival.kind === "interval" ? NEW_ARRIVAL_RATE : arrival.rate,
+      batchMin: arrival.kind === "batch" ? arrival.batchMin : NEW_BATCH_MIN,
+      batchMax: arrival.kind === "batch" ? arrival.batchMax : NEW_BATCH_MAX,
+      every: arrival.kind === "interval" ? arrival.every : NEW_INTERVAL_EVERY,
+      count: arrival.kind === "interval" ? arrival.count : NEW_INTERVAL_COUNT,
       minReq: arrival.minReq,
       maxReq: arrival.maxReq,
       requiredPool: [...arrival.requiredPool],
@@ -115,8 +174,13 @@ function arrivalToDraft(arrival: ArrivalSpec | undefined, modules: readonly Modu
   }
   return {
     enabled: false,
+    kind: "poisson",
     offKind: arrival?.kind === "none" ? "none" : "omit",
     rate: NEW_ARRIVAL_RATE,
+    batchMin: NEW_BATCH_MIN,
+    batchMax: NEW_BATCH_MAX,
+    every: NEW_INTERVAL_EVERY,
+    count: NEW_INTERVAL_COUNT,
     minReq: NEW_ARRIVAL_MIN_REQ,
     maxReq: Math.max(NEW_ARRIVAL_MIN_REQ, auto.length),
     requiredPool: auto,
@@ -156,18 +220,25 @@ export function draftToRaw(draft: ScenarioDraft): Record<string, unknown> {
   const modules = draft.modules.map((m) => {
     const raw: Record<string, unknown> = { id: m.id, resultType: m.resultType, processTime: m.processTime };
     if (m.capacity !== null) raw.capacity = m.capacity;
+    const dist = distToRaw(m);
+    if (dist) raw.processTimeDist = dist;
     return raw;
   });
   const jobs: Record<string, unknown> = { initial: draft.initial.map((required) => ({ required: [...required] })) };
   const a = draft.arrival;
   if (a.enabled) {
-    jobs.arrival = {
-      kind: "poisson",
-      rate: a.rate,
-      requiredPool: effectiveRequiredPool(draft),
-      minReq: a.minReq,
-      maxReq: a.maxReq,
-    };
+    const template = { requiredPool: effectiveRequiredPool(draft), minReq: a.minReq, maxReq: a.maxReq };
+    switch (a.kind) {
+      case "poisson":
+        jobs.arrival = { kind: "poisson", rate: a.rate, ...template };
+        break;
+      case "batch":
+        jobs.arrival = { kind: "batch", rate: a.rate, batchMin: a.batchMin, batchMax: a.batchMax, ...template };
+        break;
+      case "interval":
+        jobs.arrival = { kind: "interval", every: a.every, count: a.count, ...template };
+        break;
+    }
   } else if (a.offKind === "none") {
     jobs.arrival = { kind: "none" };
   }
@@ -251,7 +322,7 @@ export function nextModuleId(ids: readonly string[]): string {
 }
 
 /**
- * 모듈을 끝에 추가한다. 결과 종류·처리 시간·용량은 마지막 모듈을 따른다.
+ * 모듈을 끝에 추가한다. 결과 종류·처리 시간·분포·용량은 마지막 모듈을 따른다.
  * 모듈이 없으면 결과 종류는 도착 목록·초기 작업의 첫 결과, 그것도 없으면 빈 값(사용자가 채운다).
  */
 export function addModule(draft: ScenarioDraft): ScenarioDraft {
@@ -261,6 +332,8 @@ export function addModule(draft: ScenarioDraft): ScenarioDraft {
     resultType: last?.resultType ?? draft.arrival.requiredPool[0] ?? draft.initial[0]?.[0] ?? "",
     processTime: last?.processTime ?? NEW_MODULE_PROCESS_TIME,
     capacity: last?.capacity ?? null,
+    distKind: last?.distKind ?? "default",
+    cv: last?.cv ?? NEW_NORMAL_CV,
   };
   return { ...draft, modules: [...draft.modules, module] };
 }

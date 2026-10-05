@@ -1,17 +1,22 @@
 // 룰 API의 공개 타입. 룰 작성자는 이 인터페이스만 보고 코드를 짠다.
 // 모든 참조 객체는 읽기 전용 래퍼다. 월드 상태를 직접 바꿀 방법은 없고, assignTo/unassign은 명령을 요청만 한다.
-import type { JobId, JobState, ModuleId, ResultType } from "../../engine/types";
+import type { JobId, JobState, ModuleId, ProcessTimeDist, ResultType } from "../../engine/types";
 
 /** 모듈 참조 (읽기 전용) */
 export interface ModuleRef {
   readonly id: ModuleId;
   /** 이 모듈이 주는 결과 */
   readonly resultType: ResultType;
-  /** 시나리오에 정의된 기본 처리 시간(초). 작업별 실제 처리 시간은 processTimeFor(job) */
+  /** 시나리오에 정의된 평균(기대) 처리 시간(초). 작업별 기대 처리 시간은 processTimeFor(job) */
   readonly processTime: number;
+  /** 처리 시간 분포 (복사본). fixed가 아니면 실제 처리 시간은 처리할 때마다 달라지고 미리 알 수 없다 */
+  readonly processTimeDist: ProcessTimeDist;
   /** 동시에 처리할 수 있는 작업 수 */
   readonly capacity: number;
-  /** 작업 job이 이 모듈에서 실제로 걸리는 처리 시간 (규칙 rules.processTime 경유) */
+  /**
+   * 작업 job이 이 모듈에서 걸리는 기대(평균) 처리 시간 (규칙 rules.processTime 경유).
+   * 분포가 있으면 이번 처리의 실제 처리 시간은 알려 주지 않는다(감독관은 미래를 모른다).
+   */
   processTimeFor(job: JobRef): number;
   /** 슬롯도 대기열도 비어 있는가 */
   isIdle(): boolean;
@@ -22,7 +27,7 @@ export interface ModuleRef {
   /** 지금 처리 중인 작업 */
   processingJobs(): JobRef[];
   /**
-   * 새 작업이 이 모듈에서 처리를 시작하기까지 예상 대기 시간(초) (rules.estimatedWaitTime 경유).
+   * 새 작업이 이 모듈에서 처리를 시작하기까지 예상 대기 시간(초) (rules.estimatedWaitTime 경유, 기대 처리 시간 기준).
    * 이번 step에 이미 이 모듈로 요청한 작업(assignTo)도 줄에 포함한다.
    * job을 주면 그 작업 자신은 계산에서 뺀다(옮기려는 작업이 이미 이 모듈에 있을 때).
    */

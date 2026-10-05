@@ -1,7 +1,9 @@
 // 시뮬레이션 규칙의 기본 구현. 규칙은 이 파일에만 둔다(AGENTS.md "시뮬레이션 규칙 추상화").
 // world.ts, 렌더러, UI, 감독관은 규칙을 직접 계산하지 않고 world.rules 또는 이 파일의 함수를 부른다.
 
+import { combineState, deriveState, hashString, randomFromState } from "./rng";
 import type {
+  ArrivalSpec,
   AssignAction,
   Job,
   JobId,
@@ -35,14 +37,78 @@ export function stepEndTime(world: WorldState, dt: number): number {
 
 // ---------- 처리 ----------
 
-/** 처리 시간: 모듈의 고정 처리 시간 (§9 기본값: 무작위성 없음) */
+/** 기대(평균) 처리 시간: 모듈의 processTime (분포가 있어도 평균은 이 값이다) */
 function processTime(_world: WorldState, _job: Job, module: Module): number {
   return module.processTime;
 }
 
-/** progress >= processTime - EPSILON 이면 처리 완료 */
+/**
+ * 무작위 처리 시간의 하한(초). 정규 분포는 음수·0이 나올 수 있고 지수 분포도 0에 아주 가까운 값이 나올 수 있어
+ * 이 값으로 잘라낸다. 처리 시간은 양수여야 진행률(progress / 처리 시간)이 정의되고, 어떤 처리든 최소 한 step은 걸린다.
+ * dt(기본 0.1)보다 훨씬 작으므로 잘라낸 표본도 결국 "한 step에 끝남"이 되어 결과에 주는 영향은 dt 격자 오차 이하이고,
+ * 평균을 올리는 효과는 cv가 작을 때(≤ 0.3, 잘릴 확률 ≈ 0.04%) 무시할 수 있다. cv가 크면 잘린 만큼 평균이 약간 커진다.
+ */
+export const MIN_SAMPLED_PROCESS_TIME = 1e-3;
+
+/** 표준 정규 분포 표본 (Box-Muller, 난수 2개 소비). 1 - u로 log(0)을 피한다. */
+function sampleStandardNormal(random: () => number): number {
+  const u1 = random();
+  const u2 = random();
+  return Math.sqrt(-2 * Math.log(1 - u1)) * Math.cos(2 * Math.PI * u2);
+}
+
+/**
+ * 이번 처리의 실제 처리 시간 (§9 처리 시간의 무작위성). 평균은 world.rules.processTime(기대 처리 시간)이다.
+ * - fixed: 기대 처리 시간 그대로, 난수를 쓰지 않는다.
+ * - exponential: -평균 × ln(1 - u) (난수 1개)
+ * - normal: 평균 × (1 + cv × z) (난수 2개, Box-Muller)
+ * 무작위 분포의 표본은 MIN_SAMPLED_PROCESS_TIME 아래를 잘라낸다.
+ */
+function sampleProcessTime(world: WorldState, job: Job, module: Module, random: () => number): number {
+  const mean = world.rules.processTime(world, job, module);
+  const dist = module.processTimeDist;
+  switch (dist.kind) {
+    case "fixed":
+      return mean;
+    case "exponential":
+      return Math.max(MIN_SAMPLED_PROCESS_TIME, -mean * Math.log(1 - random()));
+    case "normal":
+      return Math.max(MIN_SAMPLED_PROCESS_TIME, mean * (1 + dist.cv * sampleStandardNormal(random)));
+  }
+}
+
+/**
+ * 처리 시간 난수 흐름의 salt. 도착용 월드 RNG(seedToState(seed))와 겹치지 않는 별도 흐름을 시드에서 파생한다.
+ * 값 자체에는 의미가 없고, 바꾸면 무작위 처리 시간 시나리오의 결과가 모두 바뀐다.
+ */
+export const PROCESS_TIME_STREAM_SALT = 0x50524f43; // "PROC"
+
+/** 시나리오 seed에서 처리 시간 표본용 시드를 파생한다 (createWorld가 한 번 부른다). */
+export function deriveProcessTimeSeed(seed: number): number {
+  return deriveState(seed, PROCESS_TIME_STREAM_SALT);
+}
+
+/**
+ * 이번 처리 전용 난수 (공통 난수, §5.1·§9): (처리 시간 시드, 작업 id, 모듈 id, 차수)를 해시해 만든 상태에서 시작하는 mulberry32 흐름.
+ * 월드 RNG를 소비하지 않으므로 처리 시작 순서(감독관)가 달라도 도착열이 같고,
+ * 같은 작업이 같은 모듈에서 같은 차수로 처리되면 감독관과 무관하게 같은 처리 시간이 나온다.
+ */
+function processTimeRandom(world: WorldState, job: Job, module: Module, attempt: number): () => number {
+  return randomFromState(combineState(world.processTimeSeed, hashString(job.id), hashString(module.id), attempt));
+}
+
+/**
+ * 이번 처리의 실제 처리 시간: 처리를 시작할 때 뽑아 둔 값(world.processDurations).
+ * 처리 중이 아니라 저장된 값이 없으면 기대 처리 시간을 쓴다.
+ * 진행 판정과 진행률 표시만 이 값을 쓴다. 감독관용 예상치는 미래를 알지 않도록 기대값을 쓴다.
+ */
+export function currentProcessDuration(world: Readonly<WorldState>, job: Readonly<Job>, module: Readonly<Module>): number {
+  return world.processDurations.get(job.id) ?? world.rules.processTime(world, job, module);
+}
+
+/** progress >= 이번 처리의 실제 처리 시간 - EPSILON 이면 처리 완료 */
 function isProcessFinished(world: WorldState, job: Job, module: Module): boolean {
-  return job.progress >= world.rules.processTime(world, job, module) - EPSILON;
+  return job.progress >= currentProcessDuration(world, job, module) - EPSILON;
 }
 
 /** 처리가 끝나면 모듈의 결과 하나를 얻는다. */
@@ -230,10 +296,46 @@ function sampleRequired(
     .map((i) => unique[i]);
 }
 
+/** lo~hi 정수 하나를 균등하게 고른다 (난수 1개) */
+function sampleUniformInt(lo: number, hi: number, random: () => number): number {
+  return lo + Math.floor(random() * (hi - lo + 1));
+}
+
+/**
+ * 고정 간격 도착 횟수: 도착 시각 k·every(k ≥ 1)마다, 그 시각 이상인 첫 step 시작에 도착한다(이동 시간처럼 dt 격자로 올림).
+ * 이번 step 시작 시각 simTime에 도착하는 것은 k·every ∈ (simTime - dt, simTime]인 k다. 난수를 쓰지 않는다.
+ */
+function intervalTicks(simTime: number, dt: number, every: number): number {
+  const ticksUpTo = (t: number): number => (t < 0 ? 0 : Math.floor((t + EPSILON) / every));
+  return Math.max(0, ticksUpTo(simTime) - ticksUpTo(simTime - dt));
+}
+
+/** 이번 step에 생기는 작업 수 (도착 방식별). 난수 소비 순서: 개수 → (작업마다) 목표 결과 */
+function arrivalCount(spec: Exclude<ArrivalSpec, { kind: "none" }>, world: WorldState, dt: number, random: () => number): number {
+  switch (spec.kind) {
+    case "poisson":
+      return samplePoisson(spec.rate * dt, random);
+    case "batch": {
+      // 묶음 수(포아송) → 묶음마다 크기(균등)
+      const batches = samplePoisson(spec.rate * dt, random);
+      let n = 0;
+      for (let b = 0; b < batches; b++) n += sampleUniformInt(spec.batchMin, spec.batchMax, random);
+      return n;
+    }
+    case "interval":
+      return intervalTicks(world.simTime, dt, spec.every) * spec.count;
+  }
+}
+
+/**
+ * 이번 step에 도착하는 작업 (§9 작업 등장 방식).
+ * poisson: 초당 rate개, batch: 묶음 초당 rate개 × 묶음 크기 batchMin~batchMax(같은 step에 한꺼번에),
+ * interval: 시각 k·every마다 count개. 목표 결과는 모두 requiredPool에서 minReq~maxReq개를 고른다.
+ */
 function arrivals(world: WorldState, dt: number, random: () => number): JobSpec[] {
   const spec = world.arrival;
-  if (spec.kind !== "poisson") return [];
-  const n = samplePoisson(spec.rate * dt, random);
+  if (spec.kind === "none") return [];
+  const n = arrivalCount(spec, world, dt, random);
   const result: JobSpec[] = [];
   for (let i = 0; i < n; i++) {
     result.push({ required: sampleRequired(spec.requiredPool, spec.minReq, spec.maxReq, random) });
@@ -270,6 +372,8 @@ function isEnded(world: WorldState): boolean {
 /** 기본 규칙 구현 (기획서 §2, §9 기본값) */
 export const defaultRules: RuleSet = Object.freeze({
   processTime,
+  sampleProcessTime,
+  processTimeRandom,
   isProcessFinished,
   gainedResults,
   isJobComplete,
@@ -359,7 +463,11 @@ export function isWastedProcess(world: Readonly<WorldState>, jobId: JobId, modul
   return usefulResults(world, jobId, moduleId).length === 0;
 }
 
-/** 작업이 이 모듈에서 처리를 마칠 때까지 남은 처리 시간 (현재 progress 반영, 0 이상) */
+/**
+ * 작업이 이 모듈에서 처리를 마칠 때까지 남은 처리 시간의 기대값 (현재 progress 반영, 0 이상).
+ * 감독관이 미래를 알면 안 되므로 이번 처리의 실제 처리 시간이 아니라 기대 처리 시간(rules.processTime)으로 계산한다:
+ * max(0, 기대 처리 시간 - progress). 분포가 fixed면 실제 남은 시간과 같다.
+ */
 export function remainingProcessTime(world: Readonly<WorldState>, jobId: JobId, moduleId: ModuleId): number {
   const job = world.jobs.get(jobId);
   const module = world.modules.get(moduleId);
@@ -375,7 +483,7 @@ function clampRatio(x: number): number {
 }
 
 /**
- * 작업의 처리 진행률 (0~1). 처리 시간은 world.rules.processTime을 쓴다.
+ * 작업의 처리 진행률 (0~1). 처리 시간은 이번 처리의 실제 처리 시간(currentProcessDuration)을 쓴다.
  * PROCESSING이면 progress / 처리 시간(처리 시간이 0 이하면 1), DONE_AT_MODULE이면 1, 그 밖의 상태나 없는 작업이면 0.
  */
 export function processProgressRatio(world: Readonly<WorldState>, jobId: JobId): number {
@@ -385,7 +493,7 @@ export function processProgressRatio(world: Readonly<WorldState>, jobId: JobId):
   if (job.state !== "PROCESSING") return 0;
   const module = world.modules.get(job.location.moduleId);
   if (!module) return 0;
-  const total = world.rules.processTime(world, job, module);
+  const total = currentProcessDuration(world, job, module);
   if (total <= 0) return 1;
   return clampRatio(job.progress / total);
 }
@@ -418,7 +526,9 @@ export interface WaitEstimateOptions {
  * 지금 이 모듈에 새 작업을 넣으면 처리를 시작하기까지의 예상 대기 시간.
  * 용량 N 모듈은 슬롯 N개가 독립적으로 처리한다고 보고(§2.4), 슬롯별로 비는 시각을 계산한 뒤
  * 대기열(FIFO) → 이동 중 작업(이동 시작 순서) → extraJobIds 순서로 가장 빨리 비는 슬롯에 넣는다.
- * 처리 시간은 world.rules.processTime을 쓴다. 모든 슬롯이 무기한 차 있으면 Infinity.
+ * 처리 시간은 기대 처리 시간(world.rules.processTime)을 쓴다. 처리 중인 작업도 실제로 뽑힌 처리 시간이 아니라
+ * remainingProcessTime(= max(0, 기대 처리 시간 - progress))으로 본다. 감독관이 미래(무작위 표본)를 알면 안 되기 때문이다.
+ * 분포가 fixed면 실제 값과 같다. 모든 슬롯이 무기한 차 있으면 Infinity.
  * 없는 모듈이면 Infinity.
  */
 export function estimatedWaitTime(

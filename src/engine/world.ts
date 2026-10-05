@@ -3,7 +3,7 @@
 
 import { createMetricsState, recordEvent, recordJobSpawned, updateMetrics } from "./metrics";
 import { nextRandom, seedToState } from "./rng";
-import { mergeRules, stepEndTime } from "./rules";
+import { deriveProcessTimeSeed, mergeRules, stepEndTime } from "./rules";
 import type {
   ArrivalSpec,
   Command,
@@ -57,6 +57,7 @@ export function createWorld(scenario: Scenario, options: CreateWorldOptions = {}
       id: m.id,
       resultType: m.resultType,
       processTime: m.processTime,
+      processTimeDist: m.processTimeDist ? { ...m.processTimeDist } : { kind: "fixed" },
       capacity: m.capacity ?? DEFAULT_CAPACITY,
       slots: [],
       queue: [],
@@ -74,8 +75,11 @@ export function createWorld(scenario: Scenario, options: CreateWorldOptions = {}
     rules: mergeRules(options.rules),
     arrival: copyArrival(scenario.jobs.arrival),
     rngState: seedToState(scenario.seed),
+    processTimeSeed: deriveProcessTimeSeed(scenario.seed),
+    processAttempts: new Map(),
     nextJobNumber: FIRST_JOB_NUMBER,
     moves: new Map(),
+    processDurations: new Map(),
     metricsState: createMetricsState(),
   };
 
@@ -96,7 +100,7 @@ function warn(world: WorldState, message: string): void {
   emit(world, { type: "warning", message, t: world.simTime });
 }
 
-/** 월드의 RNG 상태를 진행시키며 난수를 뽑는 함수 */
+/** 월드의 RNG 상태를 진행시키며 난수를 뽑는 함수 (작업 도착 전용. 처리 시간은 rules.processTimeRandom을 쓴다) */
 function worldRandom(world: WorldState): () => number {
   return () => {
     const draw = nextRandom(world.rngState);
@@ -132,6 +136,7 @@ function removeFrom(list: JobId[], jobId: JobId): void {
 /** 작업을 현재 위치(슬롯, 대기열, 이동)에서 떼어 낸다. 처리 중이면 처리를 취소한다. */
 function detach(world: WorldState, job: Job): void {
   world.moves.delete(job.id);
+  world.processDurations.delete(job.id);
   if (job.location.kind === "module") {
     const module = world.modules.get(job.location.moduleId);
     if (module) {
@@ -145,12 +150,35 @@ function detach(world: WorldState, job: Job): void {
   job.progress = 0;
 }
 
+/** 이 작업이 이 모듈에서 처리를 시작한 횟수를 돌려주고 1 늘린다 (processTimeRandom의 차수, 0부터). */
+function takeProcessAttempt(world: WorldState, job: Job, module: Module): number {
+  let perModule = world.processAttempts.get(job.id);
+  if (!perModule) {
+    perModule = new Map();
+    world.processAttempts.set(job.id, perModule);
+  }
+  const attempt = perModule.get(module.id) ?? 0;
+  perModule.set(module.id, attempt + 1);
+  return attempt;
+}
+
+/**
+ * 처리를 (처음부터) 시작한다: 이번 처리의 실제 처리 시간을 규칙(sampleProcessTime)으로 한 번 뽑아 저장한다.
+ * 난수는 규칙 processTimeRandom(작업·모듈·차수 기반, 월드 RNG와 분리)이 준다.
+ * 재처리·취소 후 재시작은 차수가 늘어 새 표본이 된다. 분포가 fixed면 난수를 쓰지 않는다.
+ */
+function beginProcess(world: WorldState, job: Job, module: Module): void {
+  job.state = "PROCESSING";
+  job.progress = 0;
+  const random = world.rules.processTimeRandom(world, job, module, takeProcessAttempt(world, job, module));
+  world.processDurations.set(job.id, world.rules.sampleProcessTime(world, job, module, random));
+  emit(world, { type: "processStarted", jobId: job.id, moduleId: module.id, t: world.simTime });
+}
+
 /** 작업을 모듈 슬롯에 넣고 처리를 시작한다. */
 function startProcessing(world: WorldState, job: Job, module: Module): void {
   module.slots.push(job.id);
-  job.state = "PROCESSING";
-  job.progress = 0;
-  emit(world, { type: "processStarted", jobId: job.id, moduleId: module.id, t: world.simTime });
+  beginProcess(world, job, module);
 }
 
 /** 작업을 대기 구역으로 돌려보낸다 (이미 떼어 낸 상태여야 한다). */
@@ -189,10 +217,8 @@ function applyAssign(world: WorldState, jobId: JobId, moduleId: ModuleId): void 
     case "noop":
       return;
     case "reprocess":
-      // 같은 모듈 슬롯을 그대로 쓰고 처리를 처음부터 다시 한다.
-      job.state = "PROCESSING";
-      job.progress = 0;
-      emit(world, { type: "processStarted", jobId: job.id, moduleId: module.id, t: world.simTime });
+      // 같은 모듈 슬롯을 그대로 쓰고 처리를 처음부터 다시 한다 (처리 시간도 새로 뽑는다).
+      beginProcess(world, job, module);
       return;
     case "move":
       break;
@@ -277,6 +303,7 @@ function advanceProcessing(world: WorldState, dt: number): Map<ModuleId, number>
           job.acquired.add(r);
         }
         job.state = "DONE_AT_MODULE";
+        world.processDurations.delete(jobId);
         emit(world, { type: "processFinished", jobId, moduleId: module.id, t: stepEndTime(world, dt) });
       }
     }

@@ -107,6 +107,8 @@
       .editor-modules th { color: var(--text-dim); font-weight: normal; font-size: var(--font-size-small); text-align: left; padding: 2px; }
       .editor-modules td { padding: 2px; vertical-align: top; }
       .editor-modules th:last-child, .editor-modules td:last-child { width: 2.2em; }
+      /* 처리 시간 분포 칸(5번째)은 select라 조금 넓게 */
+      .editor-modules th:nth-child(5), .editor-modules td:nth-child(5) { width: 4.6em; }
       .editor-remove { padding: 2px 6px; }
       .editor-errors { color: var(--ended); font-size: var(--font-size-small); margin: 8px 0 0; padding-left: 1.2em; }
       .editor-errors:empty { display: none; }
